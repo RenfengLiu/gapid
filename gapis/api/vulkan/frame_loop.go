@@ -276,7 +276,6 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 					switch cmd.(type) {
 					case *VkUnmapMemory:
 						vkCmd := cmd.(*VkUnmapMemory)
-						vkCmd.Extras().Observations().ApplyReads(out.State().Memory.ApplicationPool())
 						memID := vkCmd.Memory()
 						mem := GetState(out.State()).DeviceMemories().Get(memID)
 						if mem.MappedLocation().Address() != 0 {
