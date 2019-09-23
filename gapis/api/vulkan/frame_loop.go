@@ -96,6 +96,7 @@ type frameLoop struct {
 	bufferChanged   map[VkBuffer]bool
 	bufferDestroyed map[VkBuffer]bool
 	bufferToBackup  map[VkBuffer]VkBuffer
+	mappedAddress   map[uint64]value.Pointer
 
 	imageCreated   map[VkImage]bool
 	imageChanged   map[VkImage]bool
@@ -152,6 +153,7 @@ func newFrameLoop(ctx context.Context, graphicsCapture *capture.GraphicsCapture,
 		bufferChanged:   make(map[VkBuffer]bool),
 		bufferDestroyed: make(map[VkBuffer]bool),
 		bufferToBackup:  make(map[VkBuffer]VkBuffer),
+		mappedAddress:   make(map[uint64]value.Pointer),
 
 		imageCreated:   make(map[VkImage]bool),
 		imageChanged:   make(map[VkImage]bool),
@@ -247,6 +249,8 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 					log.E(ctx, "FrameLoop: Failed to backup changed resources: %v", err)
 					return
 				}
+				// Flush out the backup commands
+				stateBuilder.scratchRes.Free(stateBuilder)
 
 				// Write out some custom bytecode for the start of the loop...
 				stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
@@ -268,6 +272,24 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 			{
 				// Iterate through the loop contents, emitting instructions one by one.
 				for cmdIndex, cmd := range f.capturedLoopCmds {
+
+					switch cmd.(type) {
+					case *VkUnmapMemory:
+						vkCmd := cmd.(*VkUnmapMemory)
+						vkCmd.Extras().Observations().ApplyReads(out.State().Memory.ApplicationPool())
+						memID := vkCmd.Memory()
+						mem := GetState(out.State()).DeviceMemories().Get(memID)
+						if mem.MappedLocation().Address() != 0 {
+							sateBuilder := GetState(out.State()).newStateBuilder(ctx, newTransformerOutput(out))
+							defer sateBuilder.ta.Dispose()
+							sateBuilder.write(sateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+								if target, err := b.GetMappedTarget(value.ObservedPointer(mem.MappedLocation().Address())); err == nil {
+									f.mappedAddress[mem.MappedLocation().Address()] = target
+								}
+								return nil
+							}))
+						}
+					}
 
 					// We've already processed the first loop command, so skip that one.
 					// All others get emitted.
@@ -295,6 +317,8 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 					log.E(ctx, "FrameLoop: Failed to reset changed resources %v.", err)
 					return
 				}
+				// Flush out the reset commands
+				stateBuilder.scratchRes.Free(stateBuilder)
 
 				// Add conditional jump instruction to bring us back to the start of the loop while we've not done.
 				stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
@@ -389,7 +413,13 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 			vkCmd := cmd.(*VkDestroyBuffer)
 			buffer := vkCmd.Buffer()
 			log.D(ctx, "Buffer %v destroyed.", buffer)
-			f.bufferDestroyed[buffer] = true
+			if _, ok := f.bufferCreated[buffer]; !ok {
+				log.D(ctx, "Buffer %v is destroyed during loop.", buffer)
+				f.bufferDestroyed[buffer] = true
+				f.bufferChanged[buffer] = true
+			} else {
+				delete(f.bufferCreated, buffer)
+			}
 
 		// Images
 		case *VkCreateImage:
@@ -402,7 +432,13 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 			vkCmd := cmd.(*VkDestroyImage)
 			img := vkCmd.Image()
 			log.D(ctx, "Image %v destroyed", img)
-			f.imageDestroyed[img] = true
+			if _, ok := f.imageCreated[img]; !ok {
+				log.D(ctx, "Image %v is destroyed during loop.", img)
+				f.imageDestroyed[img] = true
+				f.imageChanged[img] = true
+			} else {
+				delete(f.imageCreated, img)
+			}
 
 		// DescriptionSetLayout(s)
 		case *VkCreateDescriptorSetLayout:
@@ -606,10 +642,6 @@ func (f *frameLoop) backupChangedBuffers(ctx context.Context, stateBuilder *stat
 			continue
 		}
 
-		if _, preset := f.bufferDestroyed[buffer]; preset {
-			continue
-		}
-
 		log.D(ctx, "Buffer [%v] changed during loop.", buffer)
 
 		bufferObj := GetState(stateBuilder.oldState).Buffers().Get(buffer)
@@ -649,7 +681,6 @@ func (f *frameLoop) backupChangedBuffers(ctx context.Context, stateBuilder *stat
 		f.bufferToBackup[buffer] = stagingBuffer
 	}
 
-	stateBuilder.scratchRes.Free(stateBuilder)
 	return nil
 }
 
@@ -714,8 +745,21 @@ func (f *frameLoop) resetResources(ctx context.Context, stateBuilder *stateBuild
 
 func (f *frameLoop) resetBuffers(ctx context.Context, stateBuilder *stateBuilder) error {
 
-	if len(f.bufferToBackup) == 0 {
-		return nil
+	for buf := range f.bufferCreated {
+		log.D(ctx, "Destroy buffer %v which was created during loop.", buf)
+		bufObj := GetState(stateBuilder.newState).Buffers().Get(buf)
+		memID := bufObj.Memory().VulkanHandle()
+		if bufObj.Memory().MappedLocation().Address() != 0 {
+			stateBuilder.write(stateBuilder.cb.VkUnmapMemory(bufObj.Device(), memID))
+		}
+		stateBuilder.write(stateBuilder.cb.VkDestroyBuffer(bufObj.Device(), buf, memory.Nullptr))
+		stateBuilder.write(stateBuilder.cb.VkFreeMemory(bufObj.Device(), memID, memory.Nullptr))
+	}
+
+	for buf := range f.bufferDestroyed {
+		log.D(ctx, "Recreate buffer %v which was destroyed during loop.", buf)
+		buffer := GetState(f.loopStartState).Buffers().Get(buf)
+		f.recreateDestroyedBuffer(ctx, stateBuilder, buffer)
 	}
 
 	for dst, src := range f.bufferToBackup {
@@ -741,8 +785,65 @@ func (f *frameLoop) resetBuffers(ctx context.Context, stateBuilder *stateBuilder
 		log.D(ctx, "Reset buffer [%v] with buffer [%v] succeed", dst, src)
 	}
 
-	stateBuilder.scratchRes.Free(stateBuilder)
 	return nil
+}
+
+func (f *frameLoop) recreateDestroyedBuffer(ctx context.Context, stateBuilder *stateBuilder, buffer BufferObjectʳ) {
+	memReq := NewVkMemoryRequirements(stateBuilder.ta,
+		buffer.MemoryRequirements().Size(), buffer.MemoryRequirements().Alignment(), buffer.MemoryRequirements().MemoryTypeBits())
+
+	createWithMemReq := stateBuilder.cb.VkCreateBuffer(
+		buffer.Device(),
+		stateBuilder.MustAllocReadData(
+			NewVkBufferCreateInfo(stateBuilder.ta,
+				VkStructureType_VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, // sType
+				0,                           // pNext
+				buffer.Info().CreateFlags(), // flags
+				buffer.Info().Size(),        // size
+				VkBufferUsageFlags(uint32(buffer.Info().Usage())|uint32(VkBufferUsageFlagBits_VK_BUFFER_USAGE_TRANSFER_DST_BIT|VkBufferUsageFlagBits_VK_BUFFER_USAGE_TRANSFER_SRC_BIT)), // usage
+				buffer.Info().SharingMode(),                      // sharingMode
+				uint32(buffer.Info().QueueFamilyIndices().Len()), // queueFamilyIndexCount
+				NewU32ᶜᵖ(stateBuilder.MustUnpackReadMap(buffer.Info().QueueFamilyIndices().All()).Ptr()), // pQueueFamilyIndices
+			)).Ptr(),
+		memory.Nullptr,
+		stateBuilder.MustAllocWriteData(buffer.VulkanHandle()).Ptr(),
+		VkResult_VK_SUCCESS,
+	)
+	createWithMemReq.Extras().Add(memReq)
+	stateBuilder.write(createWithMemReq)
+	stateBuilder.write(stateBuilder.cb.VkGetBufferMemoryRequirements(
+		buffer.Device(),
+		buffer.VulkanHandle(),
+		stateBuilder.MustAllocWriteData(memReq).Ptr(),
+	))
+
+	mem := buffer.Memory()
+	stateBuilder.createDeviceMemory(mem, false)
+	if mem.MappedLocation().Address() != 0 {
+		stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+			addr := mem.MappedLocation().Address()
+			originalTarget, ok := f.mappedAddress[addr]
+			if !ok {
+				log.E(ctx, "Did not find the original mapped address: %v!", addr)
+			}
+			newTarget, err := b.GetMappedTarget(value.ObservedPointer(addr))
+			if err != nil {
+				return err
+			}
+			b.Load(protocol.Type_AbsolutePointer, newTarget)
+			b.Store(originalTarget)
+
+			return nil
+		}))
+	}
+
+	stateBuilder.write(stateBuilder.cb.VkBindBufferMemory(
+		buffer.Device(),
+		buffer.VulkanHandle(),
+		mem.VulkanHandle(),
+		buffer.MemoryOffset(),
+		VkResult_VK_SUCCESS,
+	))
 }
 
 func (f *frameLoop) resetImages(ctx context.Context, stateBuilder *stateBuilder) error {
