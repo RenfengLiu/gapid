@@ -280,13 +280,14 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 						memID := vkCmd.Memory()
 						mem := GetState(out.State()).DeviceMemories().Get(memID)
 						if mem.MappedLocation().Address() != 0 {
-							sateBuilder := GetState(out.State()).newStateBuilder(ctx, newTransformerOutput(out))
-							defer sateBuilder.ta.Dispose()
-							sateBuilder.write(sateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
-								if target, err := b.GetMappedTarget(value.ObservedPointer(mem.MappedLocation().Address())); err == nil {
+							stateBuilder := GetState(out.State()).newStateBuilder(ctx, newTransformerOutput(out))
+							defer stateBuilder.ta.Dispose()
+							stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+								target, err := b.GetMappedTarget(value.ObservedPointer(mem.MappedLocation().Address()))
+								if err == nil {
 									f.mappedAddress[mem.MappedLocation().Address()] = target
 								}
-								return nil
+								return err
 							}))
 						}
 					}
