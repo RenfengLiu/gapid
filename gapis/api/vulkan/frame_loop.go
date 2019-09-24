@@ -123,6 +123,18 @@ type frameLoop struct {
 	commandBufferRecorded    map[VkCommandBuffer]bool // Command buffers recorded during loop.
 	commandBufferNotRecorded map[VkCommandBuffer]bool // Command buffers submitted but not recorded during loop.
 
+	semaphoreCreated   map[VkSemaphore]bool
+	semaphoreChanged   map[VkSemaphore]bool
+	semaphoreDestroyed map[VkSemaphore]bool
+
+	fenceCreated   map[VkFence]bool
+	fenceChanged   map[VkFence]bool
+	fenceDestroyed map[VkFence]bool
+
+	eventCreated   map[VkEvent]bool
+	eventChanged   map[VkEvent]bool
+	eventDestroyed map[VkEvent]bool
+
 	loopCountPtr value.Pointer
 
 	frameNum uint32
@@ -188,6 +200,18 @@ func newFrameLoop(ctx context.Context, graphicsCapture *capture.GraphicsCapture,
 		commandBufferChanged:     make(map[VkCommandBuffer]bool),
 		commandBufferRecorded:    make(map[VkCommandBuffer]bool),
 		commandBufferNotRecorded: make(map[VkCommandBuffer]bool),
+
+		semaphoreCreated:   make(map[VkSemaphore]bool),
+		semaphoreChanged:   make(map[VkSemaphore]bool),
+		semaphoreDestroyed: make(map[VkSemaphore]bool),
+
+		fenceCreated:   make(map[VkFence]bool),
+		fenceChanged:   make(map[VkFence]bool),
+		fenceDestroyed: make(map[VkFence]bool),
+
+		eventCreated:   make(map[VkEvent]bool),
+		eventChanged:   make(map[VkEvent]bool),
+		eventDestroyed: make(map[VkEvent]bool),
 
 		loopTerminated:      false,
 		lastObservedCommand: api.CmdNoID,
@@ -564,6 +588,7 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 					f.commandBufferFreed[cmdBuf] = true
 				}
 			}
+
 		case *VkBeginCommandBuffer:
 			vkCmd := cmd.(*VkBeginCommandBuffer)
 			cmdBuf := vkCmd.CommandBuffer()
@@ -581,6 +606,56 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 			// Only backup the fist time it changes
 			if _, ok := f.commandBufferChanged[cmdBuf]; !ok {
 				f.commandBufferChanged[cmdBuf] = true
+			}
+		// Semaphores
+		case *VkCreateSemaphore:
+			vkCmd := cmd.(*VkCreateSemaphore)
+			sem := vkCmd.PSemaphore().MustRead(ctx, vkCmd, currentState, nil)
+			log.D(ctx, "Semaphore %v is created during loop.", sem)
+			f.semaphoreCreated[sem] = true
+
+		case *VkDestroySemaphore:
+			vkCmd := cmd.(*VkDestroySemaphore)
+			sem := vkCmd.Semaphore()
+			log.D(ctx, "Semaphore %v is destroyed during loop.", sem)
+			if _, ok := f.semaphoreCreated[sem]; !ok {
+				f.semaphoreDestroyed[sem] = true
+			} else {
+				delete(f.semaphoreCreated, sem)
+			}
+
+		// Fences
+		case *VkCreateFence:
+			vkCmd := cmd.(*VkCreateFence)
+			fence := vkCmd.PFence().MustRead(ctx, vkCmd, currentState, nil)
+			f.fenceCreated[fence] = true
+			log.D(ctx, "Fence %v is created during loop.", fence)
+
+		case *VkDestroyFence:
+			vkCmd := cmd.(*VkDestroyFence)
+			fence := vkCmd.Fence()
+			log.D(ctx, "Fence %v is destroyed during loop.", fence)
+			if _, ok := f.fenceCreated[fence]; !ok {
+				f.fenceDestroyed[fence] = true
+			} else {
+				delete(f.fenceCreated, fence)
+			}
+
+		// Events
+		case *VkCreateEvent:
+			vkCmd := cmd.(*VkCreateEvent)
+			event := vkCmd.PEvent().MustRead(ctx, vkCmd, currentState, nil)
+			log.D(ctx, "Event %v is created during loop.", event)
+			f.eventCreated[event] = true
+
+		case *VkDestroyEvent:
+			vkCmd := cmd.(*VkDestroyEvent)
+			event := vkCmd.Event()
+			log.D(ctx, "Event %v is destroyed during loop.", event)
+			if _, ok := f.eventCreated[event]; !ok {
+				f.eventDestroyed[event] = true
+			} else {
+				delete(f.eventCreated, event)
 			}
 
 		case *VkResetCommandBuffer:
@@ -730,6 +805,38 @@ func (f *frameLoop) detectChangedDescriptorSets(ctx context.Context) {
 
 		}
 	}
+
+	// Find out changed semaphores
+	semaphores := endState.Semaphores().All()
+	for semaphore, semaphoreStartState := range GetState(f.loopStartState).Semaphores().All() {
+		if semaphoreEndState, present := semaphores[semaphore]; present {
+			if semaphoreStartState.Signaled() != semaphoreEndState.Signaled() {
+				f.semaphoreChanged[semaphore] = true
+			}
+		}
+	}
+
+	// Find out changed fences
+	fences := endState.Fences().All()
+	for fence, fenceStartState := range GetState(f.loopStartState).Fences().All() {
+		if fenceEndState, present := fences[fence]; present {
+			if fenceStartState.Signaled() != fenceEndState.Signaled() {
+				f.fenceChanged[fence] = true
+			}
+		}
+	}
+
+	// Find out changed events
+	events := endState.Events().All()
+	for event, eventStartState := range GetState(f.loopStartState).Events().All() {
+		if eventEndState, present := events[event]; present {
+			if eventStartState.Signaled() != eventEndState.Signaled() {
+				f.eventChanged[event] = true
+			}
+		}
+	}
+
+	// TODO: Find out other changed resources.
 }
 
 func (f *frameLoop) backupChangedResources(ctx context.Context, stateBuilder *stateBuilder) error {
@@ -856,6 +963,18 @@ func (f *frameLoop) resetResources(ctx context.Context, stateBuilder *stateBuild
 	}
 
 	if err := f.resetCommandBuffers(ctx, stateBuilder); err != nil {
+		return err
+	}
+
+	if err := f.resetSemaphores(ctx, stateBuilder); err != nil {
+		return err
+	}
+
+	if err := f.resetFences(ctx, stateBuilder); err != nil {
+		return err
+	}
+
+	if err := f.resetEvents(ctx, stateBuilder); err != nil {
 		return err
 	}
 
@@ -1194,6 +1313,207 @@ func (f *frameLoop) reRecordCommandBuffer(ctx context.Context, stateBuilder *sta
 		refCmdBuf.VulkanHandle(),
 		VkResult_VK_SUCCESS,
 	))
+	return nil
+}
 
+func (f *frameLoop) resetSemaphores(ctx context.Context, stateBuilder *stateBuilder) error {
+
+	for sem := range f.semaphoreCreated {
+		semObj := GetState(f.loopEndState).Semaphores().Get(sem)
+		if semObj != NilSemaphoreObjectʳ {
+			log.D(ctx, "Destroy semaphore %v which was created during loop.", sem)
+			stateBuilder.write(stateBuilder.cb.VkDestroySemaphore(semObj.Device(), semObj.VulkanHandle(), memory.Nullptr))
+		} else {
+			log.E(ctx, "Semaphore %v cannot be found in the loop ending state", sem)
+		}
+	}
+
+	for sem := range f.semaphoreDestroyed {
+		semObj := GetState(f.loopStartState).Semaphores().Get(sem)
+		if semObj != NilSemaphoreObjectʳ {
+			log.D(ctx, "Create semaphore %v which was destroyed during loop.", sem)
+			stateBuilder.createSemaphore(semObj)
+		} else {
+			log.E(ctx, "Semaphore %v cannot be found in the loop starting state", sem)
+		}
+	}
+
+	for sem := range f.semaphoreChanged {
+		if _, ok := f.semaphoreCreated[sem]; ok {
+			continue
+		}
+
+		if _, ok := f.semaphoreDestroyed[sem]; ok {
+			continue
+		}
+
+		semObj := GetState(f.loopEndState).Semaphores().Get(sem)
+		if semObj == NilSemaphoreObjectʳ {
+			log.E(ctx, "Semaphore %v cannot be found in the loop ending state", sem)
+			continue
+		}
+		queue := stateBuilder.getQueueFor(
+			VkQueueFlagBits_VK_QUEUE_GRAPHICS_BIT|VkQueueFlagBits_VK_QUEUE_COMPUTE_BIT|VkQueueFlagBits_VK_QUEUE_TRANSFER_BIT,
+			[]uint32{},
+			semObj.Device(),
+			GetState(f.loopEndState).Queues().Get(semObj.LastQueue()))
+
+		if semObj.Signaled() {
+			log.D(ctx, "Wait for semaphore %v to be signaled.", sem)
+			stateBuilder.write(stateBuilder.cb.VkQueueSubmit(
+				queue.VulkanHandle(),
+				1,
+				stateBuilder.MustAllocReadData(NewVkSubmitInfo(stateBuilder.ta,
+					VkStructureType_VK_STRUCTURE_TYPE_SUBMIT_INFO, // sType
+					0, // pNext
+					1, // waitSemaphoreCount
+					NewVkSemaphoreᶜᵖ(stateBuilder.MustAllocReadData(semObj.VulkanHandle()).Ptr()), // pWaitSemaphores
+					0, // pWaitDstStageMask
+					0, // commandBufferCount
+					0, // pCommandBuffers
+					0, // signalSemaphoreCount
+					0, // pSignalSemaphores
+				)).Ptr(),
+				VkFence(0),
+				VkResult_VK_SUCCESS,
+			))
+		} else {
+			log.D(ctx, "Signal semaphore %v.", sem)
+			stateBuilder.write(stateBuilder.cb.VkQueueSubmit(
+				queue.VulkanHandle(),
+				1,
+				stateBuilder.MustAllocReadData(NewVkSubmitInfo(stateBuilder.ta,
+					VkStructureType_VK_STRUCTURE_TYPE_SUBMIT_INFO, // sType
+					0, // pNext
+					0, // waitSemaphoreCount
+					0, // pWaitSemaphores
+					0, // pWaitDstStageMask
+					0, // commandBufferCount
+					0, // pCommandBuffers
+					1, // signalSemaphoreCount
+					NewVkSemaphoreᶜᵖ(stateBuilder.MustAllocReadData(semObj.VulkanHandle()).Ptr()), // pSignalSemaphores
+				)).Ptr(),
+				VkFence(0),
+				VkResult_VK_SUCCESS,
+			))
+		}
+	}
+	return nil
+}
+
+func (f *frameLoop) resetFences(ctx context.Context, stateBuilder *stateBuilder) error {
+
+	for fence := range f.fenceCreated {
+		fenceObj := GetState(f.loopEndState).Fences().Get(fence)
+		if fenceObj != NilFenceObjectʳ {
+			log.D(ctx, "Destroy fence: %v which was created during loop.", fence)
+			stateBuilder.write(stateBuilder.cb.VkDestroyFence(fenceObj.Device(), fenceObj.VulkanHandle(), memory.Nullptr))
+		} else {
+			log.E(ctx, "Fence %v cannot be found in the loop ending state", fence)
+		}
+	}
+
+	for fence := range f.fenceDestroyed {
+		fenceObj := GetState(f.loopStartState).Fences().Get(fence)
+		if fenceObj != NilFenceObjectʳ {
+			log.D(ctx, "Create fence %v which was destroyed during loop.", fence)
+			stateBuilder.createFence(fenceObj)
+		} else {
+			log.E(ctx, "Fence %v cannot be found in the loop starting state", fence)
+		}
+	}
+
+	for fence := range f.fenceChanged {
+		if _, ok := f.fenceCreated[fence]; ok {
+			continue
+		}
+
+		if _, ok := f.fenceDestroyed[fence]; ok {
+			continue
+		}
+
+		fenceObj := GetState(f.loopEndState).Fences().Get(fence)
+		if fenceObj == NilFenceObjectʳ {
+			log.E(ctx, "Fence %v cannot be found in the loop ending state", fence)
+			continue
+		}
+
+		if fenceObj.Signaled() {
+			pFence := stateBuilder.MustAllocReadData(fenceObj.VulkanHandle()).Ptr()
+			// Wait fence to be signaled before resetting it.
+			stateBuilder.write(stateBuilder.cb.VkWaitForFences(fenceObj.Device(), 1, pFence, VkBool32(1), 0xFFFFFFFFFFFFFFFF, VkResult_VK_SUCCESS))
+			log.D(ctx, "Reset fence %v.", fence)
+			stateBuilder.write(stateBuilder.cb.VkResetFences(fenceObj.Device(), 1, pFence, VkResult_VK_SUCCESS))
+		} else {
+			log.D(ctx, "Singal fence %v.", fence)
+			queue := stateBuilder.getQueueFor(
+				VkQueueFlagBits_VK_QUEUE_GRAPHICS_BIT|VkQueueFlagBits_VK_QUEUE_COMPUTE_BIT|VkQueueFlagBits_VK_QUEUE_TRANSFER_BIT,
+				[]uint32{},
+				fenceObj.Device(),
+				NilQueueObjectʳ)
+			if queue == NilQueueObjectʳ {
+				return log.Err(ctx, nil, "queue is nil queue")
+			}
+			stateBuilder.write(stateBuilder.cb.VkQueueSubmit(
+				queue.VulkanHandle(),
+				0,
+				memory.Nullptr,
+				fenceObj.VulkanHandle(),
+				VkResult_VK_SUCCESS,
+			))
+
+			stateBuilder.write(stateBuilder.cb.VkQueueWaitIdle(queue.VulkanHandle(), VkResult_VK_SUCCESS))
+		}
+	}
+	return nil
+}
+
+func (f *frameLoop) resetEvents(ctx context.Context, stateBuilder *stateBuilder) error {
+
+	for event := range f.eventCreated {
+		eventObj := GetState(f.loopEndState).Events().Get(event)
+		if eventObj != NilEventObjectʳ {
+			log.D(ctx, "Destroy event: %v which was created during loop.", event)
+			stateBuilder.write(stateBuilder.cb.VkDestroyEvent(eventObj.Device(), eventObj.VulkanHandle(), memory.Nullptr))
+		} else {
+			log.E(ctx, "Event %v cannot be found in loop ending state.", event)
+		}
+	}
+
+	for event := range f.eventDestroyed {
+		eventObj := GetState(f.loopStartState).Events().Get(event)
+		if eventObj != NilEventObjectʳ {
+			log.D(ctx, "Create event %v which was destroyed during loop.", event)
+			stateBuilder.createEvent(eventObj)
+		} else {
+			log.E(ctx, "Event %v cannot be found in loop starting state.", event)
+		}
+	}
+
+	for event := range f.eventChanged {
+		if _, ok := f.eventCreated[event]; ok {
+			continue
+		}
+
+		if _, ok := f.eventDestroyed[event]; ok {
+			continue
+		}
+
+		eventObj := GetState(f.loopEndState).Events().Get(event)
+		if eventObj == NilEventObjectʳ {
+			log.E(ctx, "Event %v cannot be found in loop ending state.", event)
+			continue
+		}
+		if eventObj.Signaled() {
+			log.D(ctx, "Reset event %v ", event)
+			// Wait event to be signaled before resetting it.
+			stateBuilder.write(stateBuilder.cb.ReplayGetEventStatus(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_EVENT_SET, true, VkResult_VK_SUCCESS))
+			stateBuilder.write(stateBuilder.cb.VkResetEvent(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_SUCCESS))
+		} else {
+			log.D(ctx, "Set event %v ", event)
+			stateBuilder.write(stateBuilder.cb.ReplayGetEventStatus(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_EVENT_RESET, true, VkResult_VK_SUCCESS))
+			stateBuilder.write(stateBuilder.cb.VkSetEvent(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_SUCCESS))
+		}
+	}
 	return nil
 }
