@@ -496,6 +496,8 @@ Interpreter::Result Interpreter::jumpNZ(uint32_t opcode) {
     return ERROR;
   }
   if (should_jump != 0) {
+    GAPID_WARNING("Jump from %d to %d\n\n", mCurrentInstruction,
+                  mJumpLables[jump_id]);
     mCurrentInstruction = mJumpLables[jump_id];
   }
 

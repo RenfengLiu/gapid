@@ -218,6 +218,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
   }
 
   *pSwapchain = reinterpret_cast<VkSwapchainKHR>(swp);
+  vkSetSwapchainCallback(*pSwapchain, [](void *, uint8_t *, size_t) {},
+                         nullptr);
   return VK_SUCCESS;
 }
 

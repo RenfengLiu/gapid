@@ -17,6 +17,7 @@ package vulkan
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/core/math/interval"
@@ -329,6 +330,7 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 								stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
 									target, err := b.GetMappedTarget(value.ObservedPointer(addr))
 									if err == nil {
+										log.I(ctx, "addr %v mapped target %v", addr, target)
 										f.mappedAddress[addr] = target
 									}
 									return err
@@ -439,6 +441,7 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 
 	f.loopStartState = f.cloneState(ctx, startState)
 	currentState := f.cloneState(ctx, startState)
+	framecount := 1
 
 	// Loop through each command mutating the shadow state and looking at what has been created/destroyed
 	err := api.ForeachCmd(ctx, f.capturedLoopCmds, func(ctx context.Context, cmdId api.CmdID, cmd api.Cmd) error {
@@ -452,13 +455,13 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 		case *VkAllocateMemory:
 			vkCmd := cmd.(*VkAllocateMemory)
 			mem := vkCmd.PMemory().MustRead(ctx, vkCmd, currentState, nil)
-			log.D(ctx, "Memory %v allocated", mem)
+			log.I(ctx, "Memory %v allocated", mem)
 			f.memoryAllocated[mem] = true
 
 		case *VkFreeMemory:
 			vkCmd := cmd.(*VkFreeMemory)
 			mem := vkCmd.Memory()
-			log.D(ctx, "Memory %v freed", mem)
+			log.I(ctx, "Memory %v freed", mem)
 			if _, ok := f.memoryAllocated[mem]; !ok {
 				f.memoryFreed[mem] = true
 			} else {
@@ -469,15 +472,15 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 		case *VkCreateBuffer:
 			vkCmd := cmd.(*VkCreateBuffer)
 			buffer := vkCmd.PBuffer().MustRead(ctx, vkCmd, currentState, nil)
-			log.D(ctx, "Buffer %v created.", buffer)
+			log.I(ctx, "Buffer %v created.", buffer)
 			f.bufferCreated[buffer] = true
 
 		case *VkDestroyBuffer:
 			vkCmd := cmd.(*VkDestroyBuffer)
 			buffer := vkCmd.Buffer()
-			log.D(ctx, "Buffer %v destroyed.", buffer)
+			log.I(ctx, "Buffer %v destroyed.", buffer)
 			if _, ok := f.bufferCreated[buffer]; !ok {
-				log.D(ctx, "Buffer %v is destroyed during loop.", buffer)
+				log.I(ctx, "Buffer %v is destroyed during loop.", buffer)
 				f.bufferDestroyed[buffer] = true
 				f.bufferChanged[buffer] = true
 			} else {
@@ -488,15 +491,15 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 		case *VkCreateImage:
 			vkCmd := cmd.(*VkCreateImage)
 			img := vkCmd.PImage().MustRead(ctx, vkCmd, currentState, nil)
-			log.D(ctx, "Image %v created", img)
+			log.I(ctx, "Image %v created", img)
 			f.imageCreated[img] = true
 
 		case *VkDestroyImage:
 			vkCmd := cmd.(*VkDestroyImage)
 			img := vkCmd.Image()
-			log.D(ctx, "Image %v destroyed", img)
+			log.I(ctx, "Image %v destroyed", img)
 			if _, ok := f.imageCreated[img]; !ok {
-				log.D(ctx, "Image %v is destroyed during loop.", img)
+				log.I(ctx, "Image %v is destroyed during loop.", img)
 				f.imageDestroyed[img] = true
 				f.imageChanged[img] = true
 			} else {
@@ -507,13 +510,13 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 		case *VkCreateDescriptorSetLayout:
 			vkCmd := cmd.(*VkCreateDescriptorSetLayout)
 			descriptorSetLayout := vkCmd.PSetLayout().MustRead(ctx, vkCmd, currentState, nil)
-			log.D(ctx, "DescriptorSetLayout %v created", descriptorSetLayout)
+			log.I(ctx, "DescriptorSetLayout %v created", descriptorSetLayout)
 			f.descriptorSetLayoutCreated[descriptorSetLayout] = true
 
 		case *VkDestroyDescriptorSetLayout:
 			vkCmd := cmd.(*VkDestroyDescriptorSetLayout)
 			descriptorSetLayout := vkCmd.DescriptorSetLayout()
-			log.D(ctx, "DescriptorSetLayout %v created", descriptorSetLayout)
+			log.I(ctx, "DescriptorSetLayout %v created", descriptorSetLayout)
 			if _, ok := f.descriptorSetLayoutCreated[descriptorSetLayout]; ok {
 				delete(f.descriptorSetLayoutCreated, descriptorSetLayout)
 			} else {
@@ -524,13 +527,13 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 		case *VkCreateDescriptorPool:
 			vkCmd := cmd.(*VkCreateDescriptorPool)
 			descriptorPool := vkCmd.PDescriptorPool().MustRead(ctx, vkCmd, currentState, nil)
-			log.D(ctx, "DescriptorPool %v created", descriptorPool)
+			log.I(ctx, "DescriptorPool %v created", descriptorPool)
 			f.descriptorPoolCreated[descriptorPool] = true
 
 		case *VkDestroyDescriptorPool:
 			vkCmd := cmd.(*VkDestroyDescriptorPool)
 			descriptorPool := vkCmd.DescriptorPool()
-			log.D(ctx, "DescriptorPool %v destroyed", descriptorPool)
+			log.I(ctx, "DescriptorPool %v destroyed", descriptorPool)
 			if _, ok := f.descriptorPoolCreated[descriptorPool]; ok {
 				delete(f.descriptorPoolCreated, descriptorPool)
 			} else {
@@ -549,7 +552,7 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 			descSetCount := allocInfo.DescriptorSetCount()
 			descriptorSets := vkCmd.PDescriptorSets().Slice(0, (uint64)(descSetCount), startState.MemoryLayout).MustRead(ctx, vkCmd, currentState, nil)
 			for index := range descriptorSets {
-				log.D(ctx, "DescriptorSet %v created", descriptorSets[index])
+				log.I(ctx, "DescriptorSet %v created", descriptorSets[index])
 				f.descriptorSetCreated[descriptorSets[index]] = true
 			}
 
@@ -558,7 +561,7 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 			descSetCount := vkCmd.DescriptorSetCount()
 			descriptorSets := vkCmd.PDescriptorSets().Slice(0, (uint64)(descSetCount), startState.MemoryLayout).MustRead(ctx, vkCmd, currentState, nil)
 			for index := range descriptorSets {
-				log.D(ctx, "DescriptorSet %v destroyed", descriptorSets[index])
+				log.I(ctx, "DescriptorSet %v destroyed", descriptorSets[index])
 				if _, ok := f.descriptorSetCreated[descriptorSets[index]]; ok {
 					delete(f.descriptorSetCreated, descriptorSets[index])
 				} else {
@@ -571,7 +574,7 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 			vkCmd := cmd.(*VkAllocateCommandBuffers)
 			cmdBuffers := vkCmd.PCommandBuffers().MustRead(ctx, vkCmd, currentState, nil)
 			f.commandBufferAllocated[cmdBuffers] = true
-			log.D(ctx, "Command buffer %v allcoated.", cmdBuffers)
+			log.I(ctx, "Command buffer %v allcoated.", cmdBuffers)
 		case *VkFreeCommandBuffers:
 			vkCmd := cmd.(*VkFreeCommandBuffers)
 			cmdBufCount := vkCmd.CommandBufferCount()
@@ -581,7 +584,7 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 			cmdBufs := vkCmd.PCommandBuffers().Slice(0, uint64(cmdBufCount), currentState.MemoryLayout).MustRead(ctx, cmd, currentState, nil)
 			for _, cmdBuf := range cmdBufs {
 				// The command buffer deleted in this call was created during loop, no action needed.
-				log.D(ctx, "Command buffer %v freed", cmdBufs)
+				log.I(ctx, "Command buffer %v freed", cmdBufs)
 				if _, ok := f.commandBufferAllocated[cmdBuf]; ok {
 					delete(f.commandBufferAllocated, cmdBuf)
 				} else { // The command buffer deleted in this call was not created during loop, need to back up it
@@ -593,7 +596,7 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 			vkCmd := cmd.(*VkBeginCommandBuffer)
 			cmdBuf := vkCmd.CommandBuffer()
 			f.commandBufferRecorded[cmdBuf] = true
-			log.D(ctx, "Command buffer %v beginned", cmdBuf)
+			log.I(ctx, "Command buffer %v beginned at frame %v", cmdBuf, framecount)
 
 			// If this command buffer is allocated during loop then it is reset by the re-allocation step.
 			if _, ok := f.commandBufferAllocated[cmdBuf]; ok {
@@ -611,13 +614,13 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 		case *VkCreateSemaphore:
 			vkCmd := cmd.(*VkCreateSemaphore)
 			sem := vkCmd.PSemaphore().MustRead(ctx, vkCmd, currentState, nil)
-			log.D(ctx, "Semaphore %v is created during loop.", sem)
+			log.I(ctx, "Semaphore %v is created during loop.", sem)
 			f.semaphoreCreated[sem] = true
 
 		case *VkDestroySemaphore:
 			vkCmd := cmd.(*VkDestroySemaphore)
 			sem := vkCmd.Semaphore()
-			log.D(ctx, "Semaphore %v is destroyed during loop.", sem)
+			log.I(ctx, "Semaphore %v is destroyed during loop.", sem)
 			if _, ok := f.semaphoreCreated[sem]; !ok {
 				f.semaphoreDestroyed[sem] = true
 			} else {
@@ -629,12 +632,12 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 			vkCmd := cmd.(*VkCreateFence)
 			fence := vkCmd.PFence().MustRead(ctx, vkCmd, currentState, nil)
 			f.fenceCreated[fence] = true
-			log.D(ctx, "Fence %v is created during loop.", fence)
+			log.I(ctx, "Fence %v is created during loop.", fence)
 
 		case *VkDestroyFence:
 			vkCmd := cmd.(*VkDestroyFence)
 			fence := vkCmd.Fence()
-			log.D(ctx, "Fence %v is destroyed during loop.", fence)
+			log.I(ctx, "Fence %v is destroyed during loop.", fence)
 			if _, ok := f.fenceCreated[fence]; !ok {
 				f.fenceDestroyed[fence] = true
 			} else {
@@ -645,13 +648,13 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 		case *VkCreateEvent:
 			vkCmd := cmd.(*VkCreateEvent)
 			event := vkCmd.PEvent().MustRead(ctx, vkCmd, currentState, nil)
-			log.D(ctx, "Event %v is created during loop.", event)
+			log.I(ctx, "Event %v is created during loop.", event)
 			f.eventCreated[event] = true
 
 		case *VkDestroyEvent:
 			vkCmd := cmd.(*VkDestroyEvent)
 			event := vkCmd.Event()
-			log.D(ctx, "Event %v is destroyed during loop.", event)
+			log.I(ctx, "Event %v is destroyed during loop.", event)
 			if _, ok := f.eventCreated[event]; !ok {
 				f.eventDestroyed[event] = true
 			} else {
@@ -661,7 +664,7 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 		case *VkResetCommandBuffer:
 			vkCmd := cmd.(*VkResetCommandBuffer)
 			cmdBuf := vkCmd.CommandBuffer()
-			log.D(ctx, "Command buffer %v resetted", cmdBuf)
+			log.I(ctx, "Command buffer %v resetted", cmdBuf)
 			// If this command buffer is allocated during loop then it is reset by the re-allocation step.
 			if _, ok := f.commandBufferAllocated[cmdBuf]; ok {
 				break
@@ -690,6 +693,8 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 					}
 				}
 			}
+		case *VkQueuePresentKHR:
+			framecount++
 		}
 
 		return cmd.Mutate(ctx, cmdId, currentState, nil, f.watcher)
@@ -799,7 +804,7 @@ func (f *frameLoop) detectChangedDescriptorSets(ctx context.Context) {
 			descriptorChanged = descriptorChanged || descriptorSetDataAtStart.DebugInfo() != descriptorSetDataAtEnd.DebugInfo()
 
 			if descriptorChanged == true {
-				log.D(ctx, "DescriptorSet %v modified", descriptorSetKey)
+				log.I(ctx, "DescriptorSet %v modified", descriptorSetKey)
 				f.descriptorSetChanged[descriptorSetKey] = true
 			}
 
@@ -811,6 +816,7 @@ func (f *frameLoop) detectChangedDescriptorSets(ctx context.Context) {
 	for semaphore, semaphoreStartState := range GetState(f.loopStartState).Semaphores().All() {
 		if semaphoreEndState, present := semaphores[semaphore]; present {
 			if semaphoreStartState.Signaled() != semaphoreEndState.Signaled() {
+				fmt.Printf("xxx Semaphore %v changed \n", semaphore)
 				f.semaphoreChanged[semaphore] = true
 			}
 		}
@@ -861,7 +867,7 @@ func (f *frameLoop) backupChangedBuffers(ctx context.Context, stateBuilder *stat
 			continue
 		}
 
-		log.D(ctx, "Buffer [%v] changed during loop.", buffer)
+		log.I(ctx, "Buffer [%v] changed during loop.", buffer)
 
 		bufferObj := GetState(stateBuilder.oldState).Buffers().Get(buffer)
 		if bufferObj == NilBufferObjectʳ {
@@ -916,7 +922,7 @@ func (f *frameLoop) backupChangedImages(ctx context.Context, stateBuilder *state
 			continue
 		}
 
-		log.D(ctx, "Image [%v] changed during loop.", img)
+		log.I(ctx, "Image [%v] changed during loop.", img)
 
 		// Create staging Image which is used to backup the changed images
 		imgObj := apiState.Images().Get(img)
@@ -962,10 +968,6 @@ func (f *frameLoop) resetResources(ctx context.Context, stateBuilder *stateBuild
 		return err
 	}
 
-	if err := f.resetCommandBuffers(ctx, stateBuilder); err != nil {
-		return err
-	}
-
 	if err := f.resetSemaphores(ctx, stateBuilder); err != nil {
 		return err
 	}
@@ -978,13 +980,16 @@ func (f *frameLoop) resetResources(ctx context.Context, stateBuilder *stateBuild
 		return err
 	}
 
+	if err := f.resetCommandBuffers(ctx, stateBuilder); err != nil {
+		return err
+	}
 	//TODO: Reset other resources.
 	return nil
 }
 
 func (f *frameLoop) resetDeviceMemory(ctx context.Context, stateBuilder *stateBuilder) error {
 	for mem := range f.memoryAllocated {
-		log.D(ctx, "Free memory %v which was allocated during loop.", mem)
+		log.I(ctx, "Free memory %v which was allocated during loop.", mem)
 		memObj := GetState(f.loopEndState).DeviceMemories().Get(mem)
 		if memObj == NilDeviceMemoryObjectʳ {
 			return fmt.Errorf("device memory %s doesn't exist in the loop ending state", mem)
@@ -1001,7 +1006,7 @@ func (f *frameLoop) resetDeviceMemory(ctx context.Context, stateBuilder *stateBu
 	}
 
 	for mem := range f.memoryFreed {
-		log.D(ctx, "Allcate memory %v which was freed during loop.", mem)
+		log.I(ctx, "Allcate memory %v which was freed during loop.", mem)
 		memObj := GetState(f.loopStartState).DeviceMemories().Get(mem)
 		if memObj == NilDeviceMemoryObjectʳ {
 			return fmt.Errorf("device memory %s doesn't exist in the loop starting state", mem)
@@ -1020,6 +1025,7 @@ func (f *frameLoop) resetDeviceMemory(ctx context.Context, stateBuilder *stateBu
 				if err != nil {
 					return err
 				}
+				log.I(ctx, "remap addr %v to from new target %v to old target %v", addr, newTarget, originalTarget)
 				b.Load(protocol.Type_AbsolutePointer, newTarget)
 				b.Store(originalTarget)
 
@@ -1034,13 +1040,13 @@ func (f *frameLoop) resetDeviceMemory(ctx context.Context, stateBuilder *stateBu
 func (f *frameLoop) resetBuffers(ctx context.Context, stateBuilder *stateBuilder) error {
 
 	for buf := range f.bufferCreated {
-		log.D(ctx, "Destroy buffer %v which was created during loop.", buf)
+		log.I(ctx, "Destroy buffer %v which was created during loop.", buf)
 		bufObj := GetState(stateBuilder.newState).Buffers().Get(buf)
 		stateBuilder.write(stateBuilder.cb.VkDestroyBuffer(bufObj.Device(), buf, memory.Nullptr))
 	}
 
 	for buf := range f.bufferDestroyed {
-		log.D(ctx, "Recreate buffer %v which was destroyed during loop.", buf)
+		log.I(ctx, "Recreate buffer %v which was destroyed during loop.", buf)
 		buffer := GetState(f.loopStartState).Buffers().Get(buf)
 		stateBuilder.createSameBuffer(buffer, buf)
 	}
@@ -1065,7 +1071,7 @@ func (f *frameLoop) resetBuffers(ctx context.Context, stateBuilder *stateBuilder
 			return log.Errf(ctx, err, "Reset buffer [%v] with buffer [%v] failed", dst, src)
 		}
 
-		log.D(ctx, "Reset buffer [%v] with buffer [%v] succeed", dst, src)
+		log.I(ctx, "Reset buffer [%v] with buffer [%v] succeed", dst, src)
 	}
 
 	return nil
@@ -1097,7 +1103,7 @@ func (f *frameLoop) resetImages(ctx context.Context, stateBuilder *stateBuilder)
 			return log.Errf(ctx, err, "Priming image %v with data", dst)
 		}
 
-		log.D(ctx, "Prime image from [%v] to [%v] succeed", src, dst)
+		log.I(ctx, "Prime image from [%v] to [%v] succeed", src, dst)
 	}
 
 	return nil
@@ -1180,7 +1186,7 @@ func (f *frameLoop) resetDescriptorPools(ctx context.Context, stateBuilder *stat
 func (f *frameLoop) resetCommandBuffers(ctx context.Context, stateBuilder *stateBuilder) error {
 
 	for cmdBuf := range f.commandBufferAllocated {
-		log.D(ctx, "Command buffer %v allocated during loop, free it.", cmdBuf)
+		log.I(ctx, "Command buffer %v allocated during loop, free it.", cmdBuf)
 		cmdBufObj := GetState(f.loopEndState).CommandBuffers().Get(cmdBuf)
 		if cmdBufObj != NilCommandBufferObjectʳ {
 			stateBuilder.write(stateBuilder.cb.VkFreeCommandBuffers(
@@ -1200,7 +1206,7 @@ func (f *frameLoop) resetCommandBuffers(ctx context.Context, stateBuilder *state
 			log.E(ctx, "Command buffer %v can not be found in loop starting state", cmdBuf)
 			continue
 		}
-		log.D(ctx, "Command buffer %v freed during loop, recreate it.", cmdBuf)
+		log.I(ctx, "Command buffer %v freed during loop, recreate it.", cmdBuf)
 		// sb.createCommandBuffer(cmdBufObj, cmdBufObj.Level())
 		stateBuilder.write(stateBuilder.cb.VkAllocateCommandBuffers(
 			cmdBufObj.Device(),
@@ -1223,9 +1229,26 @@ func (f *frameLoop) resetCommandBuffers(ctx context.Context, stateBuilder *state
 		if cmdBufObj == NilCommandBufferObjectʳ {
 			log.E(ctx, "Command buffer %v can not be found in loop starting state", cmdBuf)
 		}
-		log.D(ctx, "Command buffer %v changed during loop, re-record it.", cmdBuf)
+		log.I(ctx, "Command buffer %v changed during loop, re-record it.", cmdBuf)
+		stateBuilder.write(stateBuilder.cb.VkResetCommandBuffer(cmdBuf,
+			VkCommandBufferResetFlags(VkCommandBufferResetFlagBits_VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT),
+			VkResult_VK_SUCCESS,
+		))
 		if err := f.reRecordCommandBuffer(ctx, stateBuilder, cmdBufObj, cmdBuf); err != nil {
 			return err
+		}
+		update := GetState(stateBuilder.newState).CommandBuffers().Get(cmdBuf)
+		if update == NilCommandBufferObjectʳ {
+			log.I(ctx, "after record, the command buffer is nil")
+		} else {
+			log.I(ctx, "after record, the command buffer is not nil")
+		}
+		if reflect.DeepEqual(update, cmdBufObj) {
+			log.I(ctx, "after record, the command buffer is the same")
+		} else {
+			log.I(ctx, "after record, the command buffer is different")
+			fmt.Printf("cmdRef is %#v \n", cmdBufObj.Properties())
+			fmt.Printf("update is %#v \n", update.Properties())
 		}
 	}
 
@@ -1260,6 +1283,7 @@ func (f *frameLoop) resetDescriptorSets(ctx context.Context, stateBuilder *state
 	// For every DescriptorSetLayout that was modified during the loop...
 	for changed := range f.descriptorSetChanged {
 		// Write the commands needed to restore the modified object
+		log.I(ctx, "Reset changed descriptor %v set by writeDescriptorSet", changed)
 		descSetObj := GetState(f.loopStartState).descriptorSets.Get(changed)
 		stateBuilder.writeDescriptorSet(descSetObj)
 	}
@@ -1301,7 +1325,7 @@ func (f *frameLoop) reRecordCommandBuffer(ctx context.Context, stateBuilder *sta
 
 	for i, c := uint32(0), uint32(refCmdBuf.CommandReferences().Len()); i < c; i++ {
 		arg := GetCommandArgs(stateBuilder.ctx, refCmdBuf.CommandReferences().Get(i), GetState(f.loopStartState))
-		cleanup, cmd, err := AddCommand(stateBuilder.ctx, stateBuilder.cb, refCmdBuf.VulkanHandle(), stateBuilder.newState, f.loopStartState, arg)
+		cleanup, cmd, err := AddCommand(stateBuilder.ctx, stateBuilder.cb, refCmdBuf.VulkanHandle(), f.loopStartState, stateBuilder.newState, arg)
 		if err != nil {
 			return log.Errf(ctx, err, "Command Buffer %v is invalid, it will not be recorded", refCmdBuf.VulkanHandle())
 		}
@@ -1321,7 +1345,7 @@ func (f *frameLoop) resetSemaphores(ctx context.Context, stateBuilder *stateBuil
 	for sem := range f.semaphoreCreated {
 		semObj := GetState(f.loopEndState).Semaphores().Get(sem)
 		if semObj != NilSemaphoreObjectʳ {
-			log.D(ctx, "Destroy semaphore %v which was created during loop.", sem)
+			log.I(ctx, "Destroy semaphore %v which was created during loop.", sem)
 			stateBuilder.write(stateBuilder.cb.VkDestroySemaphore(semObj.Device(), semObj.VulkanHandle(), memory.Nullptr))
 		} else {
 			log.E(ctx, "Semaphore %v cannot be found in the loop ending state", sem)
@@ -1331,7 +1355,7 @@ func (f *frameLoop) resetSemaphores(ctx context.Context, stateBuilder *stateBuil
 	for sem := range f.semaphoreDestroyed {
 		semObj := GetState(f.loopStartState).Semaphores().Get(sem)
 		if semObj != NilSemaphoreObjectʳ {
-			log.D(ctx, "Create semaphore %v which was destroyed during loop.", sem)
+			log.I(ctx, "Create semaphore %v which was destroyed during loop.", sem)
 			stateBuilder.createSemaphore(semObj)
 		} else {
 			log.E(ctx, "Semaphore %v cannot be found in the loop starting state", sem)
@@ -1359,26 +1383,14 @@ func (f *frameLoop) resetSemaphores(ctx context.Context, stateBuilder *stateBuil
 			GetState(f.loopEndState).Queues().Get(semObj.LastQueue()))
 
 		if semObj.Signaled() {
-			log.D(ctx, "Wait for semaphore %v to be signaled.", sem)
-			stateBuilder.write(stateBuilder.cb.VkQueueSubmit(
-				queue.VulkanHandle(),
-				1,
-				stateBuilder.MustAllocReadData(NewVkSubmitInfo(stateBuilder.ta,
-					VkStructureType_VK_STRUCTURE_TYPE_SUBMIT_INFO, // sType
-					0, // pNext
-					1, // waitSemaphoreCount
-					NewVkSemaphoreᶜᵖ(stateBuilder.MustAllocReadData(semObj.VulkanHandle()).Ptr()), // pWaitSemaphores
-					0, // pWaitDstStageMask
-					0, // commandBufferCount
-					0, // pCommandBuffers
-					0, // signalSemaphoreCount
-					0, // pSignalSemaphores
-				)).Ptr(),
-				VkFence(0),
-				VkResult_VK_SUCCESS,
-			))
+			// According to vulkan spec:
+			// "The act of waiting for a semaphore also unsignals that semaphore. Applications must ensure that
+			// between two such wait operations, the semaphore is signaled again, with execution dependencies
+			// used to ensure these occur in order. Semaphore waits and signals should thus occur in discrete 1:1 pairs."
+			// So there's no need to wait for it be signalled here. And add additional waiting here may break the 1:1 waits and signals pairs.
+
 		} else {
-			log.D(ctx, "Signal semaphore %v.", sem)
+			log.I(ctx, "Signal semaphore %v.", sem)
 			stateBuilder.write(stateBuilder.cb.VkQueueSubmit(
 				queue.VulkanHandle(),
 				1,
@@ -1406,7 +1418,7 @@ func (f *frameLoop) resetFences(ctx context.Context, stateBuilder *stateBuilder)
 	for fence := range f.fenceCreated {
 		fenceObj := GetState(f.loopEndState).Fences().Get(fence)
 		if fenceObj != NilFenceObjectʳ {
-			log.D(ctx, "Destroy fence: %v which was created during loop.", fence)
+			log.I(ctx, "Destroy fence: %v which was created during loop.", fence)
 			stateBuilder.write(stateBuilder.cb.VkDestroyFence(fenceObj.Device(), fenceObj.VulkanHandle(), memory.Nullptr))
 		} else {
 			log.E(ctx, "Fence %v cannot be found in the loop ending state", fence)
@@ -1416,7 +1428,7 @@ func (f *frameLoop) resetFences(ctx context.Context, stateBuilder *stateBuilder)
 	for fence := range f.fenceDestroyed {
 		fenceObj := GetState(f.loopStartState).Fences().Get(fence)
 		if fenceObj != NilFenceObjectʳ {
-			log.D(ctx, "Create fence %v which was destroyed during loop.", fence)
+			log.I(ctx, "Create fence %v which was destroyed during loop.", fence)
 			stateBuilder.createFence(fenceObj)
 		} else {
 			log.E(ctx, "Fence %v cannot be found in the loop starting state", fence)
@@ -1442,10 +1454,10 @@ func (f *frameLoop) resetFences(ctx context.Context, stateBuilder *stateBuilder)
 			pFence := stateBuilder.MustAllocReadData(fenceObj.VulkanHandle()).Ptr()
 			// Wait fence to be signaled before resetting it.
 			stateBuilder.write(stateBuilder.cb.VkWaitForFences(fenceObj.Device(), 1, pFence, VkBool32(1), 0xFFFFFFFFFFFFFFFF, VkResult_VK_SUCCESS))
-			log.D(ctx, "Reset fence %v.", fence)
+			log.I(ctx, "Reset fence %v.", fence)
 			stateBuilder.write(stateBuilder.cb.VkResetFences(fenceObj.Device(), 1, pFence, VkResult_VK_SUCCESS))
 		} else {
-			log.D(ctx, "Singal fence %v.", fence)
+			log.I(ctx, "Singal fence %v.", fence)
 			queue := stateBuilder.getQueueFor(
 				VkQueueFlagBits_VK_QUEUE_GRAPHICS_BIT|VkQueueFlagBits_VK_QUEUE_COMPUTE_BIT|VkQueueFlagBits_VK_QUEUE_TRANSFER_BIT,
 				[]uint32{},
@@ -1473,7 +1485,7 @@ func (f *frameLoop) resetEvents(ctx context.Context, stateBuilder *stateBuilder)
 	for event := range f.eventCreated {
 		eventObj := GetState(f.loopEndState).Events().Get(event)
 		if eventObj != NilEventObjectʳ {
-			log.D(ctx, "Destroy event: %v which was created during loop.", event)
+			log.I(ctx, "Destroy event: %v which was created during loop.", event)
 			stateBuilder.write(stateBuilder.cb.VkDestroyEvent(eventObj.Device(), eventObj.VulkanHandle(), memory.Nullptr))
 		} else {
 			log.E(ctx, "Event %v cannot be found in loop ending state.", event)
@@ -1483,7 +1495,7 @@ func (f *frameLoop) resetEvents(ctx context.Context, stateBuilder *stateBuilder)
 	for event := range f.eventDestroyed {
 		eventObj := GetState(f.loopStartState).Events().Get(event)
 		if eventObj != NilEventObjectʳ {
-			log.D(ctx, "Create event %v which was destroyed during loop.", event)
+			log.I(ctx, "Create event %v which was destroyed during loop.", event)
 			stateBuilder.createEvent(eventObj)
 		} else {
 			log.E(ctx, "Event %v cannot be found in loop starting state.", event)
@@ -1505,12 +1517,12 @@ func (f *frameLoop) resetEvents(ctx context.Context, stateBuilder *stateBuilder)
 			continue
 		}
 		if eventObj.Signaled() {
-			log.D(ctx, "Reset event %v ", event)
+			log.I(ctx, "Reset event %v ", event)
 			// Wait event to be signaled before resetting it.
 			stateBuilder.write(stateBuilder.cb.ReplayGetEventStatus(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_EVENT_SET, true, VkResult_VK_SUCCESS))
 			stateBuilder.write(stateBuilder.cb.VkResetEvent(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_SUCCESS))
 		} else {
-			log.D(ctx, "Set event %v ", event)
+			log.I(ctx, "Set event %v ", event)
 			stateBuilder.write(stateBuilder.cb.ReplayGetEventStatus(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_EVENT_RESET, true, VkResult_VK_SUCCESS))
 			stateBuilder.write(stateBuilder.cb.VkSetEvent(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_SUCCESS))
 		}

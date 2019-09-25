@@ -15,6 +15,7 @@
  */
 
 #include "virtual_swapchain.h"
+#include <string.h>
 #include <cassert>
 #include <chrono>
 #include <fstream>
@@ -23,6 +24,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -388,6 +390,44 @@ void VirtualSwapchain::SetCallback(void callback(void *, uint8_t *, size_t),
                                    void *user_data) {
   callback_ = callback;
   callback_user_data_ = user_data;
+
+  static int frame_count = 1;
+  // TODO: get image width and height;
+  static uint32_t g_width = width_;
+  static uint32_t g_height = height_;
+
+  callback_ = [](void *user_data, uint8_t *image_data, size_t size) {
+    std::unique_ptr<char[]> data(new char[size]());
+    memcpy(data.get(), image_data, size);
+    auto t = std::chrono::system_clock::now().time_since_epoch().count();
+    auto name = "/tmp/gapid/image_" + std::to_string(frame_count) + "_ts_" +
+                std::to_string(t) + ".ppm";
+
+    auto ppm_writer = [](std::unique_ptr<char[]> image_data, size_t size,
+                         std::string file_name, uint32_t width,
+                         uint32_t height) {
+      std::ofstream out(file_name, std::ios::out | std::ios::binary);
+      auto data = image_data.get();
+      out << "P6\n" << width << "\n" << height << "\n" << 255 << "\n";
+      for (uint32_t y = 0; y < height; y++) {
+        unsigned int *row = (unsigned int *)data;
+        for (uint32_t x = 0; x < width; x++) {
+          out.write((char *)row + 2, 1);
+          out.write((char *)row + 1, 1);
+          out.write((char *)row, 1);
+          row++;
+        }
+        data += width * 4;
+      }
+      out.close();
+    };
+
+    std::thread file_writer(ppm_writer, std::move(data), size, std::move(name),
+                            g_width, g_height);
+    file_writer.detach();
+
+    frame_count++;
+  };
 }
 
 uint32_t VirtualSwapchain::ImageByteSize() const {
