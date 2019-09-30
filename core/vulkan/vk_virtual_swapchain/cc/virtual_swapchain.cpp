@@ -400,7 +400,7 @@ void VirtualSwapchain::SetCallback(void callback(void *, uint8_t *, size_t),
     std::unique_ptr<char[]> data(new char[size]());
     memcpy(data.get(), image_data, size);
     auto t = std::chrono::system_clock::now().time_since_epoch().count();
-    auto name = "/tmp/gapid/image_" + std::to_string(frame_count) + "_ts_" +
+    auto name = "c:/tmp/gapid/image_" + std::to_string(frame_count) + "_ts_" +
                 std::to_string(t) + ".ppm";
 
     auto ppm_writer = [](std::unique_ptr<char[]> image_data, size_t size,
