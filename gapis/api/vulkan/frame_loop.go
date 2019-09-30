@@ -17,7 +17,6 @@ package vulkan
 import (
 	"context"
 	"fmt"
-	"reflect"
 
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/core/math/interval"
@@ -244,6 +243,9 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 		if api.CmdID.Real(cmdId) >= f.loopStartIdx {
 
 			log.D(ctx, "FrameLoop: start loop at frame %v, cmdId %v, cmd %v.", f.frameNum, cmdId, cmd)
+			for descriptorSetKey := range GetState(out.State()).descriptorSets.All() {
+				log.I(ctx, "descriptorSetKey %v before loop.", descriptorSetKey)
+			}
 
 			f.capturedLoopCmds = append(f.capturedLoopCmds, cmd)
 			f.capturedLoopCmdIds = append(f.capturedLoopCmdIds, cmdId)
@@ -337,6 +339,25 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 								}))
 							}
 						}
+					case *VkDestroyBuffer:
+						vkCmd := cmd.(*VkDestroyBuffer)
+						bufferID := vkCmd.Buffer()
+						log.I(ctx, "XXXXXX Destroy Buffer %v", bufferID)
+						stateBuilder := GetState(out.State()).newStateBuilder(ctx, newTransformerOutput(out))
+						defer stateBuilder.ta.Dispose()
+						stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+							if target, ok := b.Remappings[bufferID]; ok {
+								log.I(ctx, "xxxxxxx bufferID %v mapped target %v", bufferID, target)
+								f.mappedAddress[uint64(bufferID)] = target
+							}
+							// target, err := b.GetMappedTarget(value.ObservedPointer(bufferID))
+							// if err == nil {
+							// 	log.I(ctx, "bufferID %v mapped target %v", bufferID, target)
+							// 	// f.mappedAddress[bufferID] = target
+							// }
+							return nil
+						}))
+
 					}
 
 					// We've already processed the first loop command, so skip that one.
@@ -568,13 +589,24 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 					f.descriptorSetDestroyed[descriptorSets[index]] = true
 				}
 			}
-
+		case *VkUpdateDescriptorSets:
+			vkCmd := cmd.(*VkUpdateDescriptorSets)
+			cnt := vkCmd.DescriptorWriteCount()
+			writes := vkCmd.PDescriptorWrites().Slice(0, (uint64)(cnt), startState.MemoryLayout).MustRead(ctx, vkCmd, currentState, nil)
+			for index, write := range writes {
+				log.I(ctx, "writes %v, set %v", index, write.DstSet())
+			}
 		// Command Buffers
+		case *VkDestroyCommandPool:
+			vkCmd := cmd.(*VkDestroyCommandPool)
+			log.I(ctx, "Destroy command pool %v", vkCmd.CommandPool())
+
 		case *VkAllocateCommandBuffers:
 			vkCmd := cmd.(*VkAllocateCommandBuffers)
 			cmdBuffers := vkCmd.PCommandBuffers().MustRead(ctx, vkCmd, currentState, nil)
 			f.commandBufferAllocated[cmdBuffers] = true
 			log.I(ctx, "Command buffer %v allcoated.", cmdBuffers)
+
 		case *VkFreeCommandBuffers:
 			vkCmd := cmd.(*VkFreeCommandBuffers)
 			cmdBufCount := vkCmd.CommandBufferCount()
@@ -610,6 +642,7 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 			if _, ok := f.commandBufferChanged[cmdBuf]; !ok {
 				f.commandBufferChanged[cmdBuf] = true
 			}
+
 		// Semaphores
 		case *VkCreateSemaphore:
 			vkCmd := cmd.(*VkCreateSemaphore)
@@ -787,6 +820,7 @@ func (f *frameLoop) detectChangedDescriptorSets(ctx context.Context) {
 	endState := GetState(f.loopEndState)
 
 	for descriptorSetKey, descriptorSetDataAtStart := range startState.descriptorSets.All() {
+		log.I(ctx, "descriptor %v in start state: ", descriptorSetKey)
 
 		descriptorSetDataAtEnd, descriptorExistsOverLoop := endState.descriptorSets.All()[descriptorSetKey]
 		_, descriptorExplicitlyDestroyedDuringLoop := f.descriptorSetDestroyed[descriptorSetKey]
@@ -799,9 +833,25 @@ func (f *frameLoop) detectChangedDescriptorSets(ctx context.Context) {
 			descriptorChanged := false
 
 			descriptorChanged = descriptorChanged || descriptorSetDataAtStart.Device() != descriptorSetDataAtEnd.Device()
+			if descriptorChanged {
+				log.I(ctx, "device changed %v: %v", descriptorSetDataAtStart.Device(), descriptorSetDataAtEnd.Device())
+				return
+			}
 			descriptorChanged = descriptorChanged || descriptorSetDataAtStart.Bindings() != descriptorSetDataAtEnd.Bindings()
+			if descriptorChanged {
+				log.I(ctx, "binding changed %v: %v", descriptorSetDataAtStart.Bindings(), descriptorSetDataAtEnd.Bindings())
+				return
+			}
 			descriptorChanged = descriptorChanged || descriptorSetDataAtStart.Layout() != descriptorSetDataAtEnd.Layout()
+			if descriptorChanged {
+				log.I(ctx, "layout changed %v : %v ", descriptorSetDataAtStart.Layout(), descriptorSetDataAtEnd.Layout())
+				return
+			}
 			descriptorChanged = descriptorChanged || descriptorSetDataAtStart.DebugInfo() != descriptorSetDataAtEnd.DebugInfo()
+			if descriptorChanged {
+				log.I(ctx, "debug info changed %v : %v", descriptorSetDataAtStart.DebugInfo(), descriptorSetDataAtEnd.DebugInfo())
+				return
+			}
 
 			if descriptorChanged == true {
 				log.I(ctx, "DescriptorSet %v modified", descriptorSetKey)
@@ -846,14 +896,14 @@ func (f *frameLoop) detectChangedDescriptorSets(ctx context.Context) {
 }
 
 func (f *frameLoop) backupChangedResources(ctx context.Context, stateBuilder *stateBuilder) error {
-
+	log.I(ctx, "Begin to backupChangedResources")
 	if err := f.backupChangedBuffers(ctx, stateBuilder); err != nil {
 		return err
 	}
 
-	if err := f.backupChangedImages(ctx, stateBuilder); err != nil {
-		return err
-	}
+	// if err := f.backupChangedImages(ctx, stateBuilder); err != nil {
+	// 	return err
+	// }
 
 	// TODO: Backup other resources.
 	return nil
@@ -937,6 +987,7 @@ func (f *frameLoop) backupChangedImages(ctx context.Context, stateBuilder *state
 		if err := f.copyImage(ctx, imgObj, stagingImage, stateBuilder); err != nil {
 			return log.Err(ctx, err, "Copy image failed")
 		}
+		log.I(ctx, "backup image %v succeed", img)
 	}
 
 	return nil
@@ -952,21 +1003,21 @@ func (f *frameLoop) resetResources(ctx context.Context, stateBuilder *stateBuild
 		return err
 	}
 
-	if err := f.resetImages(ctx, stateBuilder); err != nil {
-		return err
-	}
+	// if err := f.resetImages(ctx, stateBuilder); err != nil {
+	// 	return err
+	// }
 
-	if err := f.resetDescriptorSetLayouts(ctx, stateBuilder); err != nil {
-		return err
-	}
+	// if err := f.resetDescriptorSetLayouts(ctx, stateBuilder); err != nil {
+	// 	return err
+	// }
 
-	if err := f.resetDescriptorPools(ctx, stateBuilder); err != nil {
-		return err
-	}
+	// if err := f.resetDescriptorPools(ctx, stateBuilder); err != nil {
+	// 	return err
+	// }
 
-	if err := f.resetDescriptorSets(ctx, stateBuilder); err != nil {
-		return err
-	}
+	// if err := f.resetDescriptorSets(ctx, stateBuilder); err != nil {
+	// 	return err
+	// }
 
 	if err := f.resetSemaphores(ctx, stateBuilder); err != nil {
 		return err
@@ -1049,6 +1100,21 @@ func (f *frameLoop) resetBuffers(ctx context.Context, stateBuilder *stateBuilder
 		log.I(ctx, "Recreate buffer %v which was destroyed during loop.", buf)
 		buffer := GetState(f.loopStartState).Buffers().Get(buf)
 		stateBuilder.createSameBuffer(buffer, buf)
+		stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+			originalTarget, ok := f.mappedAddress[uint64(buf)]
+			if !ok {
+				return fmt.Errorf("did not find the original mapped address: %v", buf)
+			}
+
+			if newTarget, ok := b.Remappings[buf]; ok {
+				log.I(ctx, "bufferID %v now mapped target %v", buf, newTarget)
+				log.I(ctx, "remap addr %v to from new target %v to old target %v", buf, newTarget, originalTarget)
+				b.Load(protocol.Type_AbsolutePointer, newTarget)
+				b.Store(originalTarget)
+			}
+
+			return nil
+		}))
 	}
 
 	for dst, src := range f.bufferToBackup {
@@ -1240,16 +1306,14 @@ func (f *frameLoop) resetCommandBuffers(ctx context.Context, stateBuilder *state
 		update := GetState(stateBuilder.newState).CommandBuffers().Get(cmdBuf)
 		if update == NilCommandBufferObjectʳ {
 			log.I(ctx, "after record, the command buffer is nil")
-		} else {
-			log.I(ctx, "after record, the command buffer is not nil")
 		}
-		if reflect.DeepEqual(update, cmdBufObj) {
-			log.I(ctx, "after record, the command buffer is the same")
-		} else {
-			log.I(ctx, "after record, the command buffer is different")
-			fmt.Printf("cmdRef is %#v \n", cmdBufObj.Properties())
-			fmt.Printf("update is %#v \n", update.Properties())
-		}
+		// if reflect.DeepEqual(update, cmdBufObj) {
+		// 	log.I(ctx, "after record, the command buffer is the same")
+		// } else {
+		// 	log.I(ctx, "after record, the command buffer is different")
+		// 	fmt.Printf("cmdRef is %#v \n", cmdBufObj.Properties())
+		// 	fmt.Printf("update is %#v \n", update.Properties())
+		// }
 	}
 
 	return nil

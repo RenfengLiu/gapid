@@ -391,7 +391,7 @@ func (kb *ipRenderKitBuilder) getOrCreateRenderPass(sb *stateBuilder, info ipRen
 		VkAttachmentStoreOp_VK_ATTACHMENT_STORE_OP_DONT_CARE, // storeOp
 		VkAttachmentLoadOp_VK_ATTACHMENT_LOAD_OP_DONT_CARE,   // stencilLoadOp
 		VkAttachmentStoreOp_VK_ATTACHMENT_STORE_OP_DONT_CARE, // stencilStoreOp
-		ipRenderInputAttachmentLayout,                        // initialLayout
+		VkImageLayout_VK_IMAGE_LAYOUT_UNDEFINED,              // initialLayout
 		ipRenderInputAttachmentLayout,                        // finalLayout
 	)
 	outputDesc := NewVkAttachmentDescription(sb.ta,

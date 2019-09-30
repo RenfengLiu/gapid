@@ -56,6 +56,7 @@ inline bool sum(Stack& stack, uint32_t count) {
   return stack.isValid();
 }
 
+static uint32_t loop_end_id = -1;
 }  // anonymous namespace
 
 Interpreter::Interpreter(core::CrashHandler& crash_handler,
@@ -128,6 +129,9 @@ bool Interpreter::run(const uint32_t* instructions, uint32_t count) {
 
 void Interpreter::exec() {
   for (; mCurrentInstruction < mInstructionCount; mCurrentInstruction++) {
+    if (loop_end_id == mCurrentInstruction) {
+      GAPID_WARNING("Loop ended at instruction %d", mCurrentInstruction);
+    }
     switch (interpret(mInstructions[mCurrentInstruction])) {
       case SUCCESS:
         break;
@@ -482,6 +486,7 @@ Interpreter::Result Interpreter::switchThread(uint32_t opcode) {
 }
 
 Interpreter::Result Interpreter::jumpLabel(uint32_t opcode) {
+  GAPID_WARNING("Jump Start from here at instruction %d", mCurrentInstruction)
   auto jump_id = extract26bitData(opcode);
   mJumpLables[jump_id] = mCurrentInstruction;
   return mStack.isValid() ? SUCCESS : ERROR;
@@ -500,6 +505,8 @@ Interpreter::Result Interpreter::jumpNZ(uint32_t opcode) {
                   mJumpLables[jump_id]);
     mCurrentInstruction = mJumpLables[jump_id];
   }
+
+  loop_end_id = mCurrentInstruction;
 
   return mStack.isValid() ? SUCCESS : ERROR;
 }

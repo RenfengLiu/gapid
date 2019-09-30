@@ -91,7 +91,7 @@ func (w *PortWatcher) WaitForFile(ctx context.Context) {
 
 func (w *PortWatcher) Write(b []byte) (n int, err error) {
 	if stdout := w.stdout; stdout != nil {
-		stdout.Write(b)
+		// stdout.Write(b)
 	}
 	if w.done {
 		return len(b), nil
