@@ -1099,7 +1099,7 @@
 {{define "C++.PrintfFormatCode"}}
   {{if not (IsType $)}}{{Template "C++.PrintfFormatCode" (TypeOf $)}}
   {{else if IsPseudonym     $}}{{Template "C++.PrintfFormatCode" $.To}}
-  {{else if IsPointer       $}}%p
+  {{else if IsPointer       $}}%" PRIu64 "
   {{else if IsStaticArray   $}}%s {{/* TODO */}}
   {{else if IsClass         $}}%s
   {{else if IsString        $}}%s
@@ -1153,6 +1153,43 @@
   "[%u]{{$name}}({{ForEach $.CallParameters "C++.PrintfFormatCode" | JoinWith ", "}})"
   , cmdLabel{{if $args}}§, {{$args}}{{end}}
 {{end}}
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits a printf-style string and arguments for logging a call to command.
+-------------------------------------------------------------------------------
+*/}}
+{{define "C++.PrintfCommandCallArgsValueWithLabel"}}
+  {{AssertType $ "Function"}}
+
+  {{$name := Macro "CmdName" $}}
+  {{$args := Macro "C++.PrintfArguments" $}}
+
+  "[%u]{{$name}}({{ForEach $.CallParameters "C++.PrintfFormatCode" | JoinWith ", "}})"
+  , cmdLabel{{if $args}}§, {{$args}}{{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the comma-separated list of arguments for the given function ready for printf.
+-------------------------------------------------------------------------------
+*/}}
+{{define "C++.PrintfArgumentsContent"}}
+  {{AssertType $ "Function"}}
+
+  {{range $i, $p := $.CallParameters}}
+    {{if $i}}, {{end}}
+    {{$ty := TypeOf $p}}
+    {{if      IsStaticArray $ty}}"<static-array>"{{/* TODO */}}
+    {{else if IsClass       $ty}}"<{{$ty.Name}}>"{{/* TODO */}}
+    {{else if IsEnum        $ty}}static_cast<uint32_t>({{$p.Name}})
+    {{else if IsPointer     $ty}}*(uint64_t*){{$p.Name}}
+    {{else                     }}{{$p.Name}}
+    {{end}}§
+  {{end}}
+{{end}}
+
 
 
 {{/*

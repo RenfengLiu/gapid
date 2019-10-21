@@ -1089,16 +1089,20 @@ func (f *frameLoop) resetDeviceMemory(ctx context.Context, stateBuilder *stateBu
 }
 
 func (f *frameLoop) resetBuffers(ctx context.Context, stateBuilder *stateBuilder) error {
-
+	// waitDeviceIdle := false
 	for buf := range f.bufferCreated {
 		log.I(ctx, "Destroy buffer %v which was created during loop.", buf)
 		bufObj := GetState(stateBuilder.newState).Buffers().Get(buf)
+		stateBuilder.write(stateBuilder.cb.VkDeviceWaitIdle(bufObj.Device(), VkResult_VK_SUCCESS))
+
 		stateBuilder.write(stateBuilder.cb.VkDestroyBuffer(bufObj.Device(), buf, memory.Nullptr))
 	}
 
 	for buf := range f.bufferDestroyed {
 		log.I(ctx, "Recreate buffer %v which was destroyed during loop.", buf)
 		buffer := GetState(f.loopStartState).Buffers().Get(buf)
+		stateBuilder.write(stateBuilder.cb.VkDeviceWaitIdle(buffer.Device(), VkResult_VK_SUCCESS))
+
 		stateBuilder.createSameBuffer(buffer, buf)
 		stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
 			originalTarget, ok := f.mappedAddress[uint64(buf)]
@@ -1120,6 +1124,7 @@ func (f *frameLoop) resetBuffers(ctx context.Context, stateBuilder *stateBuilder
 	for dst, src := range f.bufferToBackup {
 
 		bufferObj := GetState(stateBuilder.newState).Buffers().Get(src)
+		stateBuilder.write(stateBuilder.cb.VkDeviceWaitIdle(bufferObj.Device(), VkResult_VK_SUCCESS))
 
 		queue := stateBuilder.getQueueFor(
 			VkQueueFlagBits_VK_QUEUE_GRAPHICS_BIT|VkQueueFlagBits_VK_QUEUE_COMPUTE_BIT|VkQueueFlagBits_VK_QUEUE_TRANSFER_BIT,

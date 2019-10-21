@@ -425,8 +425,8 @@ void VirtualSwapchain::SetCallback(void callback(void *, uint8_t *, size_t),
     std::thread file_writer(ppm_writer, std::move(data), size, std::move(name),
                             g_width, g_height);
     file_writer.detach();
-
     frame_count++;
+    std::cout << "swap chain image " << frame_count << std::endl;
   };
 }
 
