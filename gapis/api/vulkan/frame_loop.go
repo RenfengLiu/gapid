@@ -1186,6 +1186,9 @@ func (f *frameLoop) detectChangedBuffers(ctx context.Context) {
 			}
 		}
 	}
+	for buf := range f.bufferChanged {
+		log.I(ctx, "Buffer %v changed during loop", buf)
+	}
 }
 
 func (f *frameLoop) detectChangedImages(ctx context.Context) {
@@ -1244,6 +1247,31 @@ func (f *frameLoop) detectChangedImages(ctx context.Context) {
 								break
 							}
 						}
+					}
+				}
+			}
+		}
+	}
+
+	for image := range f.imageChanged {
+		log.I(ctx, "image %v changed during loop", image)
+	}
+	startState := GetState(f.loopStartState)
+	endState := GetState(f.loopStartState)
+	for imageKey, image := range startState.Images().All() {
+		if _, ok := endState.Images().All()[imageKey]; ok {
+
+			for aspect, imageAspect := range image.Aspects().All() {
+				for l, layer := range imageAspect.Layers().All() {
+					for le, level := range layer.Levels().All() {
+						startLayout := level.Layout()
+						endLayout := endState.Images().All()[imageKey].Aspects().All()[aspect].Layers().All()[l].Levels().All()[le].Layout()
+						if startLayout != endLayout {
+							log.I(ctx, "image layout changed from %v to %v", startLayout, endLayout)
+						} else {
+							log.I(ctx, "image layout is the same before %v and after %v", startLayout, endLayout)
+						}
+
 					}
 				}
 			}
@@ -1315,6 +1343,13 @@ func (f *frameLoop) detectChangedEvents(ctx context.Context) {
 	}
 }
 
+func (f *frameLoop) waitDeviceIdle(stateBuilder *stateBuilder) {
+	currentState := GetState(stateBuilder.newState)
+	for device := range currentState.Devices().All() {
+		stateBuilder.write(stateBuilder.cb.VkDeviceWaitIdle(device, VkResult_VK_SUCCESS))
+	}
+}
+
 func (f *frameLoop) backupChangedResources(ctx context.Context, stateBuilder *stateBuilder) error {
 
 	if err := f.backupChangedBuffers(ctx, stateBuilder); err != nil {
@@ -1329,6 +1364,8 @@ func (f *frameLoop) backupChangedResources(ctx context.Context, stateBuilder *st
 
 	// Flush out the backup commands
 	stateBuilder.scratchRes.Free(stateBuilder)
+
+	f.waitDeviceIdle(stateBuilder)
 	return nil
 }
 
@@ -1387,10 +1424,11 @@ func (f *frameLoop) backupChangedImages(ctx context.Context, stateBuilder *state
 
 	for img := range f.imageChanged {
 
-		log.D(ctx, "Image [%v] changed during loop.", img)
+		log.I(ctx, "Image [%v] changed during loop.", img)
 
 		// Create staging Image which is used to backup the changed images
 		imgObj := apiState.Images().Get(img)
+		log.I(ctx, "imageObj: infors %v", imgObj.Info().InitialLayout())
 		stagingImage, _, err := imgPrimer.CreateSameStagingImage(imgObj)
 
 		if err != nil {
@@ -1409,6 +1447,7 @@ func (f *frameLoop) backupChangedImages(ctx context.Context, stateBuilder *state
 
 func (f *frameLoop) resetResources(ctx context.Context, stateBuilder *stateBuilder) error {
 
+	f.waitDeviceIdle(stateBuilder)
 	if err := f.resetInstances(ctx, stateBuilder); err != nil {
 		return err
 	}
@@ -1473,13 +1512,13 @@ func (f *frameLoop) resetResources(ctx context.Context, stateBuilder *stateBuild
 		return err
 	}
 
-	if err := f.resetDescriptorPools(ctx, stateBuilder); err != nil {
-		return err
-	}
+	// if err := f.resetDescriptorPools(ctx, stateBuilder); err != nil {
+	// 	return err
+	// }
 
-	if err := f.resetDescriptorSets(ctx, stateBuilder); err != nil {
-		return err
-	}
+	// if err := f.resetDescriptorSets(ctx, stateBuilder); err != nil {
+	// 	return err
+	// }
 
 	if err := f.resetSemaphores(ctx, stateBuilder); err != nil {
 		return err
@@ -1517,6 +1556,8 @@ func (f *frameLoop) resetResources(ctx context.Context, stateBuilder *stateBuild
 
 	// Flush out the reset commands
 	stateBuilder.scratchRes.Free(stateBuilder)
+
+	f.waitDeviceIdle(stateBuilder)
 	return nil
 }
 
@@ -2068,7 +2109,7 @@ func (f *frameLoop) copyImage(ctx context.Context, srcImg, dstImg ImageObjectʳ,
 	queue := getQueueForPriming(stateBuilder, srcImg, VkQueueFlagBits_VK_QUEUE_GRAPHICS_BIT)
 
 	queueHandler := stateBuilder.scratchRes.GetQueueCommandHandler(stateBuilder, queue.VulkanHandle())
-	preCopyBarriers := ipImageLayoutTransitionBarriers(stateBuilder, dstImg, useSpecifiedLayout(srcImg.Info().InitialLayout()), useSpecifiedLayout(ipHostCopyImageLayout))
+	preCopyBarriers := ipImageLayoutTransitionBarriers(stateBuilder, dstImg, sameLayoutsOfImage(dstImg), useSpecifiedLayout(ipHostCopyImageLayout))
 
 	if err = ipRecordImageMemoryBarriers(stateBuilder, queueHandler, preCopyBarriers...); err != nil {
 		return log.Err(ctx, err, "Failed at pre device copy image layout transition")

@@ -326,6 +326,7 @@ func ipImageLayoutTransitionBarriers(sb *stateBuilder, imgObj ImageObjectʳ, old
 				oldLayouts.layoutOf(aspect, layer, level),
 				newLayouts.layoutOf(aspect, layer, level),
 			))
+			log.I(sb.ctx, "image %v aspect %v, layer %v, level %v, oldLayouts %v newlayout %v", imgObj, aspect, layer, level, oldLayouts.layoutOf(aspect, layer, level), newLayouts.layoutOf(aspect, layer, level))
 		})
 	return barriers
 }
@@ -538,16 +539,16 @@ func vkCreateImage(sb *stateBuilder, dev VkDevice, info ImageInfo, handle VkImag
 		dev, sb.MustAllocReadData(
 			NewVkImageCreateInfo(sb.ta,
 				VkStructureType_VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, // sType
-				pNext,                                   // pNext
-				info.Flags(),                            // flags
-				info.ImageType(),                        // imageType
-				info.Fmt(),                              // format
-				info.Extent(),                           // extent
-				info.MipLevels(),                        // mipLevels
-				info.ArrayLayers(),                      // arrayLayers
-				info.Samples(),                          // samples
-				info.Tiling(),                           // tiling
-				info.Usage(),                            // usage
+				pNext,              // pNext
+				info.Flags(),       // flags
+				info.ImageType(),   // imageType
+				info.Fmt(),         // format
+				info.Extent(),      // extent
+				info.MipLevels(),   // mipLevels
+				info.ArrayLayers(), // arrayLayers
+				info.Samples(),     // samples
+				info.Tiling(),      // tiling
+				VkImageUsageFlags(uint32(info.Usage())|uint32(VkImageUsageFlagBits_VK_IMAGE_USAGE_TRANSFER_DST_BIT)), // usage
 				info.SharingMode(),                      // sharingMode
 				uint32(info.QueueFamilyIndices().Len()), // queueFamilyIndexCount
 				NewU32ᶜᵖ(sb.MustUnpackReadMap(info.QueueFamilyIndices().All()).Ptr()), // pQueueFamilyIndices
