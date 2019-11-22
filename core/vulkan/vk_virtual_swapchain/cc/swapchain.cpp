@@ -202,7 +202,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
   auto swp = new VirtualSwapchain(
       device, queue, &pdd.physical_device_properties_, &pdd.memory_properties_,
       &dev_dat, pCreateInfo, pAllocator);
-
+  swp->SetAlwaysGetAcquiredImage(true);
   for (const CreateNext* pNext =
            static_cast<const CreateNext*>(pCreateInfo->pNext);
        pNext != nullptr; pNext = static_cast<const CreateNext*>(pNext->pNext)) {
