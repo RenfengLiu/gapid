@@ -100,6 +100,7 @@ func newImagePrimerRenderKitBuilder(sb *stateBuilder, dev VkDevice) *ipRenderKit
 
 // Free frees all the resources used by all the kits generated from this builder.
 func (kb *ipRenderKitBuilder) Free(sb *stateBuilder) {
+	// log.I(sb.ctx, "ipRenderKitBuilder free __________________________________________________________")
 	if kb.descSetPool != nil {
 		kb.descSetPool.Free(sb)
 		kb.descSetPool = nil
@@ -111,6 +112,8 @@ func (kb *ipRenderKitBuilder) Free(sb *stateBuilder) {
 	if kb.imageViewPool != nil {
 		kb.imageViewPool.Free(sb)
 		kb.imageViewPool = nil
+	} else {
+		log.I(sb.ctx, "kb.imageViewPool is nil------------------")
 	}
 	for _, p := range kb.pipelinePool {
 		sb.write(sb.cb.VkDestroyPipeline(kb.dev, p, memory.Nullptr))
@@ -155,13 +158,16 @@ func (kb *ipRenderKitBuilder) BuildRenderKits(sb *stateBuilder, recipes ...ipRen
 		kits[i].dependentPieces = append(kits[i].dependentPieces, descSetReservation)
 		des := descSets[i]
 		inputImage := GetState(sb.newState).Images().Get(recipes[i].inputAttachmentImage)
-		queue := getQueueForPriming(sb, inputImage, VkQueueFlagBits_VK_QUEUE_GRAPHICS_BIT)
-		queueHandler := sb.scratchRes.GetQueueCommandHandler(sb, queue.VulkanHandle())
-		inputAttachmentBarriers := ipImageLayoutTransitionBarriers(sb, inputImage, sameLayoutsOfImage(inputImage), useSpecifiedLayout(ipRenderInputAttachmentLayout))
-		if err = ipRecordImageMemoryBarriers(sb, queueHandler, inputAttachmentBarriers...); err != nil {
-			return nil, log.Err(sb.ctx, err, "Failed to record image layout transition for input attachment")
-		}
-
+		// queue := getQueueForPriming(sb, inputImage, VkQueueFlagBits_VK_QUEUE_GRAPHICS_BIT)
+		// queueHandler := sb.scratchRes.GetQueueCommandHandler(sb, queue.VulkanHandle())
+		inputPreAttachmentBarriers := ipImageLayoutTransitionBarriers(sb, inputImage, sameLayoutsOfImage(inputImage) /*useSpecifiedLayout(VkImageLayout_VK_IMAGE_LAYOUT_UNDEFINED),*/, useSpecifiedLayout(ipRenderInputAttachmentLayout))
+		inputPostAttachmentBarriers := ipImageLayoutTransitionBarriers(sb, inputImage, useSpecifiedLayout(ipRenderInputAttachmentLayout) /*useSpecifiedLayout(inputImage.Info().InitialLayout())*/, sameLayoutsOfImage(inputImage))
+		// if err = ipRecordImageMemoryBarriers(sb, queueHandler, inputAttachmentBarriers...); err != nil {
+		// 	return nil, log.Err(sb.ctx, err, "Failed to record image layout transition for input attachment")
+		// }
+		// log.I(sb.ctx, "pre %+v, post %+v \n\n\n", inputPreAttachmentBarriers, inputPostAttachmentBarriers)
+		kits[i].inputPreBarriers = append(kits[i].inputPreBarriers, inputPreAttachmentBarriers...)
+		kits[i].inputPostBarriers = append(kits[i].inputPreBarriers, inputPostAttachmentBarriers...)
 		inputView := kb.imageViewPool.getOrCreateImageView(sb, kb.nm, ipImageViewInfo{
 			image:  recipes[i].inputAttachmentImage,
 			aspect: recipes[i].inputAttachmentAspect,
@@ -240,6 +246,8 @@ type ipRenderKit struct {
 	pipelineLayout    VkPipelineLayout
 	descriptorSet     VkDescriptorSet
 	dependentPieces   []flushablePiece
+	inputPreBarriers  []VkImageMemoryBarrier
+	inputPostBarriers []VkImageMemoryBarrier
 }
 
 // BuildRenderCommands generates a queue command batch which when being

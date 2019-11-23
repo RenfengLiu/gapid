@@ -63,13 +63,37 @@ type ipPrimeableHostCopy struct {
 }
 
 func (c ipPrimeableHostCopy) prime(sb *stateBuilder, srcLayout, dstLayout ipLayoutInfo) error {
+
 	var err error
 	if len(c.kits) == 0 {
 		return fmt.Errorf("None host copy kit for priming by host copy")
 	}
-	dstImgObj := GetState(sb.newState).Images().Get(c.kits[0].dstImage)
+	dstImageObjs := []ImageObjectʳ{}
+	for _, kit := range c.kits {
+		dstImgObj := GetState(sb.newState).Images().Get(kit.dstImage)
+		inList := false
+		for _, dst := range dstImageObjs {
+			if dst.VulkanHandle() == dstImgObj.VulkanHandle() {
+				inList = true
+				break
+			}
+		}
+		if inList == false {
+			dstImageObjs = append(dstImageObjs, dstImgObj)
+		}
+	}
+	log.I(sb.ctx, "dstImageObjs lens is %v, images are %+v", len(dstImageObjs), dstImageObjs)
+	// dstImgObj := GetState(sb.newState).Images().Get(c.kits[0].dstImage)
+	preCopyBarriers := []VkImageMemoryBarrier{}
+	postCopyBarriers := []VkImageMemoryBarrier{}
+
 	queueHandler := sb.scratchRes.GetQueueCommandHandler(sb, c.queue)
-	preCopyBarriers := ipImageLayoutTransitionBarriers(sb, dstImgObj, srcLayout, useSpecifiedLayout(ipHostCopyImageLayout))
+	for _, dstImgObj := range dstImageObjs {
+		preCopyBarriers = append(preCopyBarriers, ipImageLayoutTransitionBarriers(sb, dstImgObj, srcLayout, useSpecifiedLayout(ipHostCopyImageLayout))...)
+		postCopyBarriers = append(postCopyBarriers, ipImageLayoutTransitionBarriers(sb, dstImgObj, useSpecifiedLayout(ipHostCopyImageLayout), dstLayout)...)
+
+	}
+	// log.I(sb.ctx, "ipPrimeableHostCopy preCopyBarriers %+v ", preCopyBarriers)
 	err = ipRecordImageMemoryBarriers(sb, queueHandler, preCopyBarriers...)
 	if err != nil {
 		return log.Errf(sb.ctx, err, "failed at pre host copy image layout transition")
@@ -81,7 +105,8 @@ func (c ipPrimeableHostCopy) prime(sb *stateBuilder, srcLayout, dstLayout ipLayo
 			return log.Errf(sb.ctx, err, "failed at commit buffer image copy commands")
 		}
 	}
-	postCopyBarriers := ipImageLayoutTransitionBarriers(sb, dstImgObj, useSpecifiedLayout(ipHostCopyImageLayout), dstLayout)
+	// postCopyBarriers := ipImageLayoutTransitionBarriers(sb, dstImgObj, useSpecifiedLayout(ipHostCopyImageLayout), dstLayout)
+	// log.I(sb.ctx, "ipPrimeableHostCopy postCopyBarriers %+v ", postCopyBarriers)
 	err = ipRecordImageMemoryBarriers(sb, queueHandler, postCopyBarriers...)
 	if err != nil {
 		return log.Errf(sb.ctx, err, "failed at post host copy image layout transition")
@@ -110,6 +135,7 @@ func (c ipPrimeableDeviceCopy) prime(sb *stateBuilder, srcLayout, dstLayout ipLa
 	dstImgObj := GetState(sb.newState).Images().Get(c.kits[0].dstImage)
 	queueHandler := sb.scratchRes.GetQueueCommandHandler(sb, c.queue)
 	preCopyBarriers := ipImageLayoutTransitionBarriers(sb, dstImgObj, srcLayout, useSpecifiedLayout(ipDeviceCopyDstImageLayout))
+	// log.I(sb.ctx, "ipPrimeableDeviceCopy preCopyBarriers %+v ", preCopyBarriers)
 	err = ipRecordImageMemoryBarriers(sb, queueHandler, preCopyBarriers...)
 	if err != nil {
 		return log.Errf(sb.ctx, err, "failed at pre device copy image layout transition")
@@ -124,6 +150,7 @@ func (c ipPrimeableDeviceCopy) prime(sb *stateBuilder, srcLayout, dstLayout ipLa
 	}
 
 	postCopyBarriers := ipImageLayoutTransitionBarriers(sb, dstImgObj, useSpecifiedLayout(ipDeviceCopyDstImageLayout), dstLayout)
+	// log.I(sb.ctx, "ipPrimeableDeviceCopy postCopyBarriers %+v ", postCopyBarriers)
 	err = ipRecordImageMemoryBarriers(sb, queueHandler, postCopyBarriers...)
 	if err != nil {
 		return log.Errf(sb.ctx, err, "failed at post device copy image layout transition")
@@ -176,10 +203,22 @@ func (pi *ipPrimeableRenderKits) prime(sb *stateBuilder, srcLayout, dstLayout ip
 		return log.Errf(sb.ctx, err, "failed at pre rendering image layout transition")
 	}
 	for _, kit := range pi.kits {
+		// log.I(sb.ctx, "kit.inputPreBarriers is %+v", kit.inputPreBarriers)
+		// err = ipRecordImageMemoryBarriers(sb, queueHandler, kit.inputPreBarriers...)
+		// if err != nil {
+		// 	return log.Errf(sb.ctx, err, "failed at pre rendering image layout transition")
+		// }
+
 		cmdBatch := kit.BuildRenderCommands(sb)
+
 		if err = cmdBatch.Commit(sb, queueHandler); err != nil {
 			return log.Errf(sb.ctx, err, "failed at committing render kit commands")
 		}
+		// log.I(sb.ctx, "kit.inputPostBarriers is %+v", kit.inputPostBarriers)
+		// err = ipRecordImageMemoryBarriers(sb, queueHandler, kit.inputPostBarriers...)
+		// if err != nil {
+		// 	return log.Errf(sb.ctx, err, "failed at pre rendering image layout transition")
+		// }
 	}
 	postRenderingBarriers := ipImageLayoutTransitionBarriers(sb, newStateImgObj, useSpecifiedLayout(renderingLayout), dstLayout)
 	err = ipRecordImageMemoryBarriers(sb, queueHandler, postRenderingBarriers...)
@@ -217,6 +256,7 @@ func (pi *ipPrimeableStoreKits) prime(sb *stateBuilder, srcLayout, dstLayout ipL
 	}
 	queueHandler := sb.scratchRes.GetQueueCommandHandler(sb, pi.queue)
 	preStoreBarriers := ipImageLayoutTransitionBarriers(sb, newStateImgObj, srcLayout, useSpecifiedLayout(ipStoreImageLayout))
+	// log.I(sb.ctx, "ipPrimeableStoreKits postRenderingBarriers %+v ", preStoreBarriers)
 	err = ipRecordImageMemoryBarriers(sb, queueHandler, preStoreBarriers...)
 	if err != nil {
 		return log.Errf(sb.ctx, err, "failed at recording pre image store layout transition")
@@ -228,6 +268,7 @@ func (pi *ipPrimeableStoreKits) prime(sb *stateBuilder, srcLayout, dstLayout ipL
 		}
 	}
 	postStoreBarriers := ipImageLayoutTransitionBarriers(sb, newStateImgObj, useSpecifiedLayout(ipStoreImageLayout), dstLayout)
+	// log.I(sb.ctx, "ipPrimeableStoreKits postStoreBarriers %+v ", postStoreBarriers)
 	err = ipRecordImageMemoryBarriers(sb, queueHandler, postStoreBarriers...)
 	if err != nil {
 		return log.Errf(sb.ctx, err, "failed at recording post image store layout transition")
@@ -670,6 +711,7 @@ func (p *imagePrimer) newPrimeableImageDataFromHost(img VkImage, opaqueBoundRang
 
 // newPrimeableImageDataFromDevice builds primeable image data from the on device source image.
 func (p *imagePrimer) newPrimeableImageDataFromDevice(srcImg, dstImg VkImage) (primeableImageData, error) {
+	log.I(p.sb.ctx, "newPrimeableImageDataFromDevice, srcimage %v, desimage %v", srcImg, dstImg)
 	nilQueueErr := fmt.Errorf("Nil Queue")
 	notImplErr := fmt.Errorf("Not Implemented")
 	srcImgObj := GetState(p.sb.newState).Images().Get(srcImg)
@@ -699,13 +741,14 @@ func (p *imagePrimer) newPrimeableImageDataFromDevice(srcImg, dstImg VkImage) (p
 
 	primeByRendering := (!primeByCopy) && ((srcImgObj.Info().Usage() & attBits) != 0)
 	if primeByRendering {
+
 		queue := getQueueForPriming(p.sb, srcImgObj, VkQueueFlagBits_VK_QUEUE_GRAPHICS_BIT)
 		if queue.IsNil() {
 			return nil, log.Errf(p.sb.ctx, nilQueueErr, "[Building primeable image data that can be primed by rendering from on device image: %v]", srcImg)
 		}
 		dev := queue.Device()
 		primeable := &ipPrimeableRenderKits{img: srcImg, queue: queue.VulkanHandle(), kits: []ipRenderKit{}}
-
+		log.I(p.sb.ctx, "primeByRendering %+v", primeable)
 		kb := p.GetRenderKitBuilder(dev)
 		recipes := []ipRenderRecipe{}
 
