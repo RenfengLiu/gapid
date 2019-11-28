@@ -49,9 +49,10 @@ void null_callback(void*, uint8_t*, size_t) {}
 
 const char* kImageDumpPathEnv = "IMAGE_DUMP_PATH";
 
-void WritePngFile(std::unique_ptr<uint8_t[]> image_data, size_t size,
-                  std::string file_name, uint32_t width, uint32_t height,
-                  VkFormat image_format) {
+__attribute__((unused)) void WritePngFile(std::unique_ptr<uint8_t[]> image_data,
+                                          size_t size, std::string file_name,
+                                          uint32_t width, uint32_t height,
+                                          VkFormat image_format) {
   auto data = image_data.get();
 
   switch (image_format) {
@@ -79,6 +80,47 @@ void WritePngFile(std::unique_ptr<uint8_t[]> image_data, size_t size,
     default:
       break;
   }
+}
+
+void WritePpmFile(std::unique_ptr<uint8_t[]> image_data, size_t size,
+                  std::string file_name, uint32_t width, uint32_t height,
+                  VkFormat image_format) {
+  std::ofstream out(file_name, std::ios::out | std::ios::binary);
+  auto data = image_data.get();
+  out << "P6\n" << width << "\n" << height << "\n" << 255 << "\n";
+
+  switch (image_format) {
+    case VK_FORMAT_B8G8R8A8_UNORM:
+    case VK_FORMAT_B8G8R8A8_UINT:
+      for (uint32_t y = 0; y < height; y++) {
+        uint32_t* row = (uint32_t*)data;
+        for (uint32_t x = 0; x < width; x++) {
+          out.write((char*)row + 2, 1);
+          out.write((char*)row + 1, 1);
+          out.write((char*)row, 1);
+          row++;
+        }
+        data += width * 4;
+      }
+      break;
+
+    case VK_FORMAT_R8G8B8A8_UNORM:
+    case VK_FORMAT_R8G8B8A8_UINT:
+      for (uint32_t y = 0; y < height; y++) {
+        unsigned int* row = (unsigned int*)data;
+        for (uint32_t x = 0; x < width; x++) {
+          out.write((char*)row, 3);
+          row++;
+        }
+        data += width * 4;
+      }
+      break;
+
+    default:
+      break;
+  }
+
+  out.close();
 }
 
 }  // namespace
@@ -344,11 +386,18 @@ void VirtualSwapchain::DumpImageToFile(uint8_t* image_data, size_t size) {
   memcpy(image_data_owned.get(), image_data, size);
 
   auto now = std::chrono::system_clock::now().time_since_epoch().count();
+  // auto image_path = image_dump_dir_ + "/image_" +
+  //                   std::to_string(dumped_frame_count_++) + "_ts_" +
+  //                   std::to_string(now) + ".png";
+
+  // std::thread file_writer(WritePngFile, std::move(image_data_owned), size,
+  //                         image_path, width_, height_,
+  //                         swapchain_info_.imageFormat);
+
   auto image_path = image_dump_dir_ + "/image_" +
                     std::to_string(dumped_frame_count_++) + "_ts_" +
-                    std::to_string(now) + ".png";
-
-  std::thread file_writer(WritePngFile, std::move(image_data_owned), size,
+                    std::to_string(now) + ".ppm";
+  std::thread file_writer(WritePpmFile, std::move(image_data_owned), size,
                           image_path, width_, height_,
                           swapchain_info_.imageFormat);
   file_writer.detach();
