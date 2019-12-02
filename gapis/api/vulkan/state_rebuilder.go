@@ -995,6 +995,10 @@ func (sb *stateBuilder) createSwapchain(swp SwapchainObjectʳ) {
 			})
 		sb.transferImageQueueFamilyOwnership(ownerTransferInfo...)
 	}
+
+	for imageIndex, isAcquired := range swp.ImagesAcquired().All() {
+		log.I(sb.ctx, "imageIndex %v, acquired %v", imageIndex, isAcquired)
+	}
 }
 
 func (sb *stateBuilder) createDeviceMemory(mem DeviceMemoryObjectʳ, allowDedicatedNV bool) {
@@ -1642,7 +1646,10 @@ func (sb *stateBuilder) primeImage(img ImageObjectʳ, imgPrimer *imagePrimer, op
 		return
 	}
 	// We have to handle the above cases at some point.
-
+	// sb.write(sb.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+	// 	b.JumpLabel(uint32(222))
+	// 	return nil
+	// }))
 	primeable, err := imgPrimer.newPrimeableImageDataFromHost(img.VulkanHandle(), opaqueRanges)
 	if err != nil {
 		log.E(sb.ctx, "Create primeable image data: %v", err)
@@ -1786,6 +1793,7 @@ func (sb *stateBuilder) createFence(fnc FenceObjectʳ) {
 }
 
 func (sb *stateBuilder) createSemaphore(sem SemaphoreObjectʳ) {
+	log.I(sb.ctx, "sem %v signal state %v", sem.VulkanHandle(), sem.Signaled())
 	sb.write(sb.cb.VkCreateSemaphore(
 		sem.Device(),
 		sb.MustAllocReadData(NewVkSemaphoreCreateInfo(sb.ta,
@@ -2994,7 +3002,7 @@ func (sb *stateBuilder) createSameBuffer(src BufferObjectʳ, buffer VkBuffer, me
 				pNext,                    // pNext
 				src.Info().CreateFlags(), // flags
 				src.Info().Size(),        // size
-				VkBufferUsageFlags(uint32(src.Info().Usage())|uint32(VkBufferUsageFlagBits_VK_BUFFER_USAGE_TRANSFER_DST_BIT)), // usage
+				VkBufferUsageFlags(uint32(src.Info().Usage())|uint32(VkBufferUsageFlagBits_VK_BUFFER_USAGE_TRANSFER_DST_BIT|VkBufferUsageFlagBits_VK_BUFFER_USAGE_TRANSFER_SRC_BIT)), // usage
 				src.Info().SharingMode(),                                                    // sharingMode
 				uint32(src.Info().QueueFamilyIndices().Len()),                               // queueFamilyIndexCount
 				NewU32ᶜᵖ(sb.MustUnpackReadMap(src.Info().QueueFamilyIndices().All()).Ptr()), // pQueueFamilyIndices

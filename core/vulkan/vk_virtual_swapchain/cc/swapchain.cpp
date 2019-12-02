@@ -202,12 +202,12 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
   auto swp = new VirtualSwapchain(
       device, queue, &pdd.physical_device_properties_, &pdd.memory_properties_,
       &dev_dat, pCreateInfo, pAllocator);
+  swp->SetAlwaysGetAcquiredImage(true);
 
   for (const CreateNext* pNext =
            static_cast<const CreateNext*>(pCreateInfo->pNext);
        pNext != nullptr; pNext = static_cast<const CreateNext*>(pNext->pNext)) {
     if (pNext->sType == VIRTUAL_SWAPCHAIN_CREATE_PNEXT) {
-      swp->SetAlwaysGetAcquiredImage(true);
       if (pNext->surfaceCreateInfo) {
         swp->CreateBaseSwapchain(pdd.instance_, &inst_dat, pAllocator,
                                  pNext->surfaceCreateInfo);
@@ -217,6 +217,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
   }
 
   *pSwapchain = reinterpret_cast<VkSwapchainKHR>(swp);
+  vkSetSwapchainCallback(*pSwapchain, [](void*, uint8_t*, size_t) {}, nullptr);
   return VK_SUCCESS;
 }
 

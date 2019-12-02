@@ -345,6 +345,7 @@ func ipImageLayoutTransitionBarriers(sb *stateBuilder, imgObj ImageObjectʳ, old
 // VkImageMemoryBarrier to the command buffer of the given queue command
 // handler.
 func ipRecordImageMemoryBarriers(sb *stateBuilder, queueHandler *queueCommandHandler, barriers ...VkImageMemoryBarrier) error {
+	// log.I(sb.ctx, "ipRecordImageMemoryBarriers %#v", barriers)
 	err := queueHandler.RecordCommands(sb, "", func(commandBuffer VkCommandBuffer) {
 		sb.write(sb.cb.VkCmdPipelineBarrier(
 			commandBuffer,
@@ -439,6 +440,7 @@ func unpackData(ctx context.Context, data []uint8, srcFmt, dstFmt *image.Format)
 	sf := proto.Clone(srcFmt).(*image.Format).GetUncompressed().GetFormat()
 	df := proto.Clone(dstFmt).(*image.Format).GetUncompressed().GetFormat()
 
+	log.I(ctx, "In unpackData sf %#v, df %#v", sf, df)
 	// The casting rule is described as below:
 	// If the data layout is UNORM, unsigned extends the src data to uint32
 	// If the data layout is SNORM, signed extends the src data to sint32
@@ -941,9 +943,10 @@ type ipShaderModuleInfo struct {
 func ipCreateShaderModule(sb *stateBuilder, nm debugMarkerName, dev VkDevice, info ipShaderModuleInfo) (VkShaderModule, error) {
 	var err error
 	code := []uint32{}
+	log.I(sb.ctx, "in ipCreateShaderModule, info is %#v", info)
 	switch info.stage {
 	case VkShaderStageFlagBits_VK_SHADER_STAGE_VERTEX_BIT:
-		code, err = ipRenderVertexShaderSpirv()
+		code, err = ipRenderVertexShaderSpirv(sb.ctx)
 	case VkShaderStageFlagBits_VK_SHADER_STAGE_FRAGMENT_BIT:
 		switch info.outputAspect {
 		case VkImageAspectFlagBits_VK_IMAGE_ASPECT_DEPTH_BIT:
@@ -953,9 +956,9 @@ func ipCreateShaderModule(sb *stateBuilder, nm debugMarkerName, dev VkDevice, in
 		case VkImageAspectFlagBits_VK_IMAGE_ASPECT_COLOR_BIT:
 			// Prime from host image data, the staging image is always in format of VkFormat_VK_FORMAT_R32G32B32A32_UINT
 			if info.inputFormat == stagingColorImageBufferFormat {
-				code, err = ipRenderColorShaderSpirv(info.outputFormat)
+				code, err = ipRenderColorShaderSpirv(info.outputFormat, sb.ctx)
 			} else { // Otherwise, the input and output format should be the same.
-				code, err = ipCopyByRenderShaderSpirv(info.outputFormat)
+				code, err = ipCopyByRenderShaderSpirv(info.outputFormat, sb.ctx)
 			}
 		default:
 			return VkShaderModule(0), fmt.Errorf("Unsupported output aspect: %v for stage: %v", info.outputAspect, info.stage)
@@ -1004,6 +1007,7 @@ func ipCreateImageView(sb *stateBuilder, nm debugMarkerName, dev VkDevice, info 
 		return GetState(sb.newState).ImageViews().Contains(VkImageView(x)) ||
 			GetState(sb.oldState).ImageViews().Contains(VkImageView(x))
 	}))
+	log.I(sb.ctx, "imageview infos are %#v", info)
 	sb.write(sb.cb.VkCreateImageView(
 		dev,
 		NewVkImageViewCreateInfoᶜᵖ(sb.MustAllocReadData(

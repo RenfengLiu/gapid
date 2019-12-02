@@ -51,6 +51,7 @@ func newScratchResources() *scratchResources {
 // Free frees first submit all the pending commands held by all the queue
 // command handlers, then free all the memories and command pools.
 func (res *scratchResources) Free(sb *stateBuilder) {
+	log.I(sb.ctx, "in scratchResources free() .................")
 	for q, h := range res.queueCommandHandlers {
 		err := h.Submit(sb)
 		if err != nil {

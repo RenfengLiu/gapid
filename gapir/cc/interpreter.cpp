@@ -519,6 +519,7 @@ Interpreter::Result Interpreter::switchThread(uint32_t opcode) {
 }
 
 Interpreter::Result Interpreter::jumpLabel(uint32_t opcode) {
+  GAPID_WARNING("\n\n\nAdded label %d\n\n\n", extract26bitData(opcode));
   return mStack.isValid() ? SUCCESS : ERROR;
 }
 
@@ -538,12 +539,9 @@ Interpreter::Result Interpreter::jumpNZ(uint32_t opcode) {
       GAPID_WARNING("Error: unknown jumpLabel %i", jump_id);
     }
 
-    GAPID_VERBOSE("JUMP TAKEN");
-    // The -1 on the following line is present because the program counter
-    // is going to step forwards after this instruction is complete.
-    mCurrentInstruction = mJumpLabels[jump_id] - 1;
-  } else {
-    GAPID_VERBOSE("JUMP NOT TAKEN");
+    GAPID_WARNING("Jump from %d to %d\n\n\n", mCurrentInstruction,
+                  mJumpLabels[jump_id])
+    mCurrentInstruction = mJumpLabels[jump_id];
   }
 
   return mStack.isValid() ? SUCCESS : ERROR;

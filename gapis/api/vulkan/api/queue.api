@@ -64,9 +64,9 @@ cmd void vkGetDeviceQueue(
   id := ?
   if !(id in Queues) {
     Queues[id] = new!QueueObject(
-      Device: device,
-      Family:  queueFamilyIndex,
-      Index:  queueIndex,
+      Device:        device,
+      Family:        queueFamilyIndex,
+      Index:         queueIndex,
       VulkanHandle:  id)
     dev := Devices[device]
     dev.QueueObjects[len(dev.QueueObjects)] = Queues[id]
@@ -139,7 +139,7 @@ cmd VkResult vkQueueSubmit(
         } else {
           semaphore := Semaphores[ws]
 
-          if(semaphore.SubmitCount == 0) {
+          if (semaphore.SubmitCount == 0) {
             vkErrorSemaphoreNotSubmitted(ws)
           } else {
             LastBoundQueue.PendingCommands[len(LastBoundQueue.PendingCommands)]
@@ -414,8 +414,8 @@ cmd VkResult vkQueueBindSparse(
       imageMemoryBinds := imageBindInfo.pBinds[0:imageBindInfo.bindCount]
       for k in (0 .. imageBindInfo.bindCount) {
         if (imageMemoryBinds[k].memory != as!VkDeviceMemory(0)) &&
-              !(imageMemoryBinds[k].memory in DeviceMemories) {
-            vkErrorInvalidDeviceMemory(imageMemoryBinds[k].memory)
+            !(imageMemoryBinds[k].memory in DeviceMemories) {
+          vkErrorInvalidDeviceMemory(imageMemoryBinds[k].memory)
         }
         bindsToQueue.SparseImageMemoryBinds[k] = imageMemoryBinds[k]
       }

@@ -15,14 +15,17 @@
 package vulkan
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/gapis/shadertools"
 )
 
 // ipRenderVertexShaderSpirv returns a vertex shader for priming by rendering
 // with hard-coded vertex data, in SPIR-V words.
-func ipRenderVertexShaderSpirv() ([]uint32, error) {
+func ipRenderVertexShaderSpirv(ctx context.Context) ([]uint32, error) {
+	log.I(ctx, "in ipRenderVertexShaderSpirv ............")
 	return shadertools.CompileGlsl(
 		`#version 450
 vec2 positions[6] = vec2[](
@@ -44,7 +47,8 @@ void main() {
 
 // ipRenderColorShaderSpirv returns a fragment shader for priming by rendering
 // for color aspect data, in SPIR-V words.
-func ipRenderColorShaderSpirv(vkFmt VkFormat) ([]uint32, error) {
+func ipRenderColorShaderSpirv(vkFmt VkFormat, ctx context.Context) ([]uint32, error) {
+	log.I(ctx, "In ipRenderColorShaderSpirv, format is %+v", vkFmt)
 	switch vkFmt {
 	case VkFormat_VK_FORMAT_R8_UINT,
 		VkFormat_VK_FORMAT_R8G8_UINT,
@@ -63,6 +67,8 @@ func ipRenderColorShaderSpirv(vkFmt VkFormat) ([]uint32, error) {
 		VkFormat_VK_FORMAT_A8B8G8R8_UINT_PACK32,
 		VkFormat_VK_FORMAT_A2R10G10B10_UINT_PACK32,
 		VkFormat_VK_FORMAT_A2B10G10R10_UINT_PACK32:
+		log.I(ctx, "In ipRenderColorShaderSpirv, VkFormat_VK_FORMAT_R8_UINT format is %+v", vkFmt)
+
 		return shadertools.CompileGlsl(
 			`#version 450
 precision highp int;
@@ -96,6 +102,8 @@ void main() {
 		VkFormat_VK_FORMAT_A8B8G8R8_SINT_PACK32,
 		VkFormat_VK_FORMAT_A2R10G10B10_SINT_PACK32,
 		VkFormat_VK_FORMAT_A2B10G10R10_SINT_PACK32:
+		log.I(ctx, "In ipRenderColorShaderSpirv, VkFormat_VK_FORMAT_R8_SINT format is %+v", vkFmt)
+
 		return shadertools.CompileGlsl(
 			`#version 450
 precision highp int;
@@ -126,6 +134,8 @@ void main() {
 		VkFormat_VK_FORMAT_B8G8R8A8_SRGB,
 		VkFormat_VK_FORMAT_A8B8G8R8_UNORM_PACK32,
 		VkFormat_VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+		// log.I()
+		log.I(ctx, "In ipRenderColorShaderSpirv, VkFormat_VK_FORMAT_R8_UNORM format is %+v", vkFmt)
 		return shadertools.CompileGlsl(
 			`#version 450
 precision highp int;
@@ -147,6 +157,8 @@ void main() {
 		VkFormat_VK_FORMAT_R16G16_UNORM,
 		VkFormat_VK_FORMAT_R16G16B16_UNORM,
 		VkFormat_VK_FORMAT_R16G16B16A16_UNORM:
+		log.I(ctx, "In ipRenderColorShaderSpirv, VkFormat_VK_FORMAT_R16_UNORM format is %+v", vkFmt)
+
 		return shadertools.CompileGlsl(
 			`#version 450
 precision highp int;
@@ -167,6 +179,8 @@ void main() {
 	case VkFormat_VK_FORMAT_R4G4_UNORM_PACK8,
 		VkFormat_VK_FORMAT_R4G4B4A4_UNORM_PACK16,
 		VkFormat_VK_FORMAT_B4G4R4A4_UNORM_PACK16:
+		log.I(ctx, "In ipRenderColorShaderSpirv, VkFormat_VK_FORMAT_R4G4_UNORM_PACK8 format is %+v", vkFmt)
+
 		return shadertools.CompileGlsl(
 			`#version 450
 precision highp int;
@@ -248,6 +262,8 @@ void main() {
 		VkFormat_VK_FORMAT_B8G8R8_SNORM,
 		VkFormat_VK_FORMAT_B8G8R8A8_SNORM,
 		VkFormat_VK_FORMAT_A8B8G8R8_SNORM_PACK32:
+		log.I(ctx, "In ipRenderColorShaderSpirv, VkFormat_VK_FORMAT_R8_SNORM format is %+v", vkFmt)
+
 		return shadertools.CompileGlsl(
 			`#version 450
 precision highp int;
@@ -272,6 +288,8 @@ void main() {
 		VkFormat_VK_FORMAT_R16G16_SNORM,
 		VkFormat_VK_FORMAT_R16G16B16_SNORM,
 		VkFormat_VK_FORMAT_R16G16B16A16_SNORM:
+		log.I(ctx, "In ipRenderColorShaderSpirv, VkFormat_VK_FORMAT_R16_SNORM format is %+v", vkFmt)
+
 		return shadertools.CompileGlsl(
 			`#version 450
 precision highp int;
@@ -324,6 +342,8 @@ void main() {
 		VkFormat_VK_FORMAT_R32G32B32A32_SFLOAT,
 		VkFormat_VK_FORMAT_B10G11R11_UFLOAT_PACK32,
 		VkFormat_VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+		log.I(ctx, "In ipRenderColorShaderSpirv, VkFormat_VK_FORMAT_R16_SFLOAT format is %+v", vkFmt)
+
 		return shadertools.CompileGlsl(
 			`#version 450
 precision highp int;
@@ -703,7 +723,7 @@ func ipComputeCopySpirv(
 	return shadertools.CompileGlsl(source, opt)
 }
 
-func ipCopyByRenderShaderSpirv(format VkFormat) ([]uint32, error) {
+func ipCopyByRenderShaderSpirv(format VkFormat, ctx context.Context) ([]uint32, error) {
 	unit, err := storageImageUnit(format)
 	if err != nil {
 		return []uint32{}, fmt.Errorf("Getting image unit, err: %v", err)
@@ -718,6 +738,8 @@ func ipCopyByRenderShaderSpirv(format VkFormat) ([]uint32, error) {
 	void main() {
 		out_color = subpassLoad(in_color);
 	}`, unit, unit)
+
+	log.I(ctx, "Format %#v, shader code is %#v", format, source)
 
 	opt := shadertools.CompileOptions{
 		ShaderType: shadertools.TypeFragment,

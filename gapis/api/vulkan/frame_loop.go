@@ -331,8 +331,27 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 	}
 
 	// Walk the frame count forwards if we just hit the end of one.
-	if _, ok := cmd.(*VkQueuePresentKHR); ok {
+	// if _, ok := cmd.(*VkQueuePresentKHR); ok {
+	// 	f.frameNum++
+	// }
+
+	switch cmd.(type) {
+	case *VkQueuePresentKHR:
 		f.frameNum++
+	case *VkCreateBuffer:
+		// currentState = out
+		cmd.Extras().Observations().ApplyReads(out.State().Memory.ApplicationPool())
+		cmd.Extras().Observations().ApplyWrites(out.State().Memory.ApplicationPool())
+		vkCmd := cmd.(*VkCreateBuffer)
+		buffer := vkCmd.PBuffer().MustRead(ctx, vkCmd, out.State(), nil)
+		log.D(ctx, "Buffer %+v is going to be created", buffer)
+	case *VkAcquireNextImageKHR:
+		cmd.Extras().Observations().ApplyReads(out.State().Memory.ApplicationPool())
+		cmd.Extras().Observations().ApplyWrites(out.State().Memory.ApplicationPool())
+		vkCmd := cmd.(*VkAcquireNextImageKHR)
+		sem := vkCmd.Semaphore()
+		semObj := GetState(out.State()).Semaphores().Get(sem)
+		log.I(ctx, "sem %v status %v", semObj.VulkanHandle(), semObj.Signaled())
 	}
 
 	// Are we before the loop or just at the start of it?
@@ -384,12 +403,19 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 
 				stateBuilder := apiState.newStateBuilder(ctx, newTransformerOutput(out))
 				defer stateBuilder.ta.Dispose()
-
+				stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+					b.JumpLabel(uint32(111))
+					return nil
+				}))
 				// Back up the resources that change in the loop (as indentified above)
 				if err := f.backupChangedResources(ctx, stateBuilder); err != nil {
 					log.E(ctx, "FrameLoop: Failed to backup changed resources: %v", err)
 					return
 				}
+				stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+					b.JumpLabel(uint32(222))
+					return nil
+				}))
 
 				// Write out some custom bytecode for the start of the loop...
 				stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
@@ -415,6 +441,13 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 				for cmdIndex, cmd := range f.capturedLoopCmds {
 
 					switch cmd.(type) {
+					// case *VkCreateBuffer:
+					// 	// currentState =
+					// 	vkCmd := cmd.(*VkCreateBuffer)
+					// 	buffer := vkCmd.PBuffer().MustRead(ctx, vkCmd, out.State(), nil)
+					// 	log.I(ctx, "Buffer %+v is going to be created", buffer)
+					// log.D(ctx, "Buffer %v created.", buffer)
+
 					case *VkUnmapMemory:
 						vkCmd := cmd.(*VkUnmapMemory)
 						mem := vkCmd.Memory()
@@ -462,26 +495,38 @@ func (f *frameLoop) Transform(ctx context.Context, cmdId api.CmdID, cmd api.Cmd,
 				out.NotifyPostLoop(ctx)
 
 				// Add conditional jump instruction to break us out of the loop if we are done.
+				// stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+				// 	b.Load(protocol.Type_Int32, f.loopCountPtr)
+				// 	b.Sub(1)
+				// 	b.Clone(0)
+				// 	b.Store(f.loopCountPtr)
+				// 	b.JumpZ(uint32(0x2))
+				// 	return nil
+				// }))
 				stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
-					b.Load(protocol.Type_Int32, f.loopCountPtr)
-					b.Sub(1)
-					b.Clone(0)
-					b.Store(f.loopCountPtr)
-					b.JumpZ(uint32(0x2))
+					b.JumpLabel(uint32(333))
 					return nil
 				}))
-
 				// Now we need to emit the instructions to reset the state, before the conditional branch back to the start of the loop.
 				if err := f.resetResources(ctx, stateBuilder); err != nil {
 					log.E(ctx, "FrameLoop: Failed to reset changed resources %v.", err)
 					return
 				}
+				stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+					b.JumpLabel(uint32(444))
+					return nil
+				}))
 
 				// Add unconditional jump instruction to bring us back to the start of the loop if we made it past the conditional break.
 				stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
-					b.Push(value.S32(1))
+					// b.Push(value.S32(1))
+					b.Load(protocol.Type_Int32, f.loopCountPtr)
+					b.Sub(1)
+					b.Clone(0)
+					b.Store(f.loopCountPtr)
+
 					b.JumpNZ(uint32(0x1))
-					b.JumpLabel(uint32(0x2))
+					// b.JumpLabel(uint32(0x2))
 					return nil
 				}))
 			}
@@ -631,13 +676,13 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 		case *VkCreateBuffer:
 			vkCmd := cmd.(*VkCreateBuffer)
 			buffer := vkCmd.PBuffer().MustRead(ctx, vkCmd, currentState, nil)
-			log.D(ctx, "Buffer %v created.", buffer)
+			// log.D(ctx, "Buffer %v created.", buffer)
 			f.bufferToDestroy[buffer] = true
 
 		case *VkDestroyBuffer:
 			vkCmd := cmd.(*VkDestroyBuffer)
 			buffer := vkCmd.Buffer()
-			log.D(ctx, "Buffer %v destroyed.", buffer)
+			// log.D(ctx, "Buffer %v destroyed.", buffer)
 			if _, ok := f.bufferToDestroy[buffer]; ok {
 				delete(f.bufferToDestroy, buffer)
 			} else {
@@ -729,13 +774,13 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 		case *VkCreateImage:
 			vkCmd := cmd.(*VkCreateImage)
 			img := vkCmd.PImage().MustRead(ctx, vkCmd, currentState, nil)
-			log.D(ctx, "Image %v created", img)
+			log.I(ctx, "Image %v created", img)
 			f.imageToDestroy[img] = true
 
 		case *VkDestroyImage:
 			vkCmd := cmd.(*VkDestroyImage)
 			img := vkCmd.Image()
-			log.D(ctx, "Image %v destroyed", img)
+			log.I(ctx, "Image %v destroyed", img)
 			if _, ok := f.imageToDestroy[img]; ok {
 				delete(f.imageToDestroy, img)
 			} else {
@@ -1107,7 +1152,7 @@ func (f *frameLoop) buildStartEndStates(ctx context.Context, startState *api.Glo
 			cmdBufCount := vkCmd.CommandBufferCount()
 			cmdBufs := vkCmd.PCommandBuffers().Slice(0, uint64(cmdBufCount), currentState.MemoryLayout).MustRead(ctx, cmd, currentState, nil)
 			for _, cmdBuf := range cmdBufs {
-				log.D(ctx, "Command buffer %v freed.", cmdBufs)
+				log.I(ctx, "Command buffer %v freed.", cmdBufs)
 				if _, ok := f.commandBufferToFree[cmdBuf]; ok {
 					// The command buffer freed in this call was created during loop, no action needed.
 					delete(f.commandBufferToFree, cmdBuf)
@@ -1168,6 +1213,7 @@ func (f *frameLoop) detectChangedBuffers(ctx context.Context) {
 
 			// If we're going to recreate this object for the start of the loop we need to set its state back to the right conditions
 			f.bufferChanged[bufferKey] = true
+			// log.I(ctx, "Buffer %v to be created, mem %v", bufferKey, buffer.Memory())
 			continue
 
 		} else if toDestroy == true {
@@ -1221,11 +1267,14 @@ func (f *frameLoop) detectChangedImages(ctx context.Context) {
 
 			// If we're going to recreate this object for the start of the loop we need to set its state back to the right conditions
 			f.imageChanged[image.VulkanHandle()] = true
+			log.I(ctx, "image %v destroyed during loop", image.VulkanHandle())
 			continue
 
 		} else if toDestroy == true {
 
 			// If we created this object during the loop and we're going to destroy this object at the end of the loop then we don't need to capture the state
+			log.I(ctx, "image %v created during loop", image.VulkanHandle())
+
 			continue
 
 		} else {
@@ -1233,11 +1282,20 @@ func (f *frameLoop) detectChangedImages(ctx context.Context) {
 			// Otherwise, we'll need to capture this objects state IFF it was modified during the loop
 			// Gotta remember to process all aspects, layers and levels of an image
 
-			for _, imageAspect := range image.Aspects().All() {
+			newImage := GetState(f.loopEndState).Images().Get(image.VulkanHandle())
+			for aspectID, imageAspect := range image.Aspects().All() {
 
-				for _, layer := range imageAspect.Layers().All() {
+				for layerID, layer := range imageAspect.Layers().All() {
 
-					for _, level := range layer.Levels().All() {
+					for levelID, level := range layer.Levels().All() {
+
+						oldlayout := image.Aspects().Get(aspectID).Layers().Get(layerID).Levels().Get(levelID).Layout()
+						newlayout := newImage.Aspects().Get(aspectID).Layers().Get(layerID).Levels().Get(levelID).Layout()
+						if oldlayout != newlayout {
+							log.I(ctx, "--------------------oldLayout %#v, newlayout %#v", oldlayout, newlayout)
+						} else {
+							log.I(ctx, "++++++++++++++++++++oldLayout %#v, newlayout %#v", oldlayout, newlayout)
+						}
 
 						data := level.Data()
 						span := interval.U64Span{data.Base(), data.Base() + data.Size()}
@@ -1250,6 +1308,7 @@ func (f *frameLoop) detectChangedImages(ctx context.Context) {
 							// We do this by comparing the image's part's memory extent with all the observed written areas.
 							if _, count := interval.Intersect(writes, span); count != 0 {
 								f.imageChanged[imageKey] = true
+								log.I(ctx, "Image %v changed during loop ", imageKey)
 								break
 							}
 						}
@@ -1336,8 +1395,11 @@ func (f *frameLoop) detectChangedDescriptorSets(ctx context.Context) {
 				log.D(ctx, "DescriptorSet %v modified", descriptorSetKey)
 				f.descriptorSetChanged[descriptorSetKey] = true
 			}
+
+			// f.descriptorSetChanged[descriptorSetKey] = true
 		}
 	}
+
 }
 
 func (f *frameLoop) detectChangedSemaphores(ctx context.Context) {
@@ -1430,7 +1492,8 @@ func (f *frameLoop) backupChangedBuffers(ctx context.Context, stateBuilder *stat
 
 	for buffer := range f.bufferChanged {
 
-		log.D(ctx, "Buffer [%v] changed during loop.", buffer)
+		// log.I(ctx, "Buffer [%v] changed during loop.", buffer)
+
 		bufferObj := GetState(stateBuilder.oldState).Buffers().Get(buffer)
 		if bufferObj == NilBufferObjectʳ {
 			return log.Err(ctx, nil, "Buffer is nil")
@@ -1471,7 +1534,7 @@ func (f *frameLoop) backupChangedImages(ctx context.Context, stateBuilder *state
 	apiState := GetState(stateBuilder.oldState)
 
 	imgPrimer := newImagePrimer(stateBuilder)
-	defer imgPrimer.Free()
+	// defer imgPrimer.Free()
 
 	for img := range f.imageChanged {
 
@@ -1624,6 +1687,7 @@ func (f *frameLoop) resetInstances(ctx context.Context, stateBuilder *stateBuild
 	// For every Instance that we need to destroy at the end of the loop...
 	for toDestroy := range f.instanceToDestroy {
 		// Write the command to delete the created object
+		log.I(ctx, "destroy instance %v", toDestroy)
 		instance := GetState(f.loopEndState).instances.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyInstance(instance.VulkanHandle(), memory.Nullptr))
 	}
@@ -1631,6 +1695,7 @@ func (f *frameLoop) resetInstances(ctx context.Context, stateBuilder *stateBuild
 	// For every Instance that we need to create at the end of the loop...
 	for toCreate := range f.instanceToCreate {
 		// Write the commands needed to recreate the destroyed object
+		log.I(ctx, "create instance %v", toCreate)
 		instance := GetState(f.loopStartState).instances.Get(toCreate)
 		stateBuilder.createInstance(instance.VulkanHandle(), instance)
 	}
@@ -1665,6 +1730,7 @@ func (f *frameLoop) resetDevices(ctx context.Context, stateBuilder *stateBuilder
 	// For every Device that we need to destroy at the end of the loop...
 	for toDestroy := range f.deviceToDestroy {
 		// Write the command to delete the created object
+		log.I(ctx, "destroy device %v", toDestroy)
 		device := GetState(f.loopEndState).devices.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyDevice(device.VulkanHandle(), memory.Nullptr))
 	}
@@ -1672,6 +1738,7 @@ func (f *frameLoop) resetDevices(ctx context.Context, stateBuilder *stateBuilder
 	// For every Device that we need to create at the end of the loop...
 	for toCreate := range f.deviceToCreate {
 		// Write the commands needed to recreate the destroyed object
+		log.I(ctx, "create device %v", toCreate)
 		device := GetState(f.loopStartState).devices.Get(toCreate)
 		stateBuilder.createDevice(device)
 	}
@@ -1897,7 +1964,7 @@ func (f *frameLoop) resetDeviceMemory(ctx context.Context, stateBuilder *stateBu
 	}
 
 	for mem := range f.memoryToFree {
-		log.D(ctx, "Free memory %v which was allocated during loop.", mem)
+		log.I(ctx, "Free memory %v which was allocated during loop.", mem)
 		memObj := GetState(f.loopEndState).DeviceMemories().Get(mem)
 		if memObj == NilDeviceMemoryObjectʳ {
 			return fmt.Errorf("device memory %s doesn't exist in the loop ending state", mem)
@@ -1911,7 +1978,7 @@ func (f *frameLoop) resetDeviceMemory(ctx context.Context, stateBuilder *stateBu
 	}
 
 	for mem := range f.memoryToAllocate {
-		log.D(ctx, "Allcate memory %v which was freed during loop.", mem)
+		log.I(ctx, "Allcate memory %v which was freed during loop.", mem)
 		memObj := GetState(f.loopStartState).DeviceMemories().Get(mem)
 		if memObj == NilDeviceMemoryObjectʳ {
 			return fmt.Errorf("device memory %s doesn't exist in the loop starting state", mem)
@@ -1965,7 +2032,7 @@ func (f *frameLoop) resetDeviceMemory(ctx context.Context, stateBuilder *stateBu
 func (f *frameLoop) resetBuffers(ctx context.Context, stateBuilder *stateBuilder) error {
 
 	for buf := range f.bufferToDestroy {
-		log.D(ctx, "Destroy buffer %v which was created during loop.", buf)
+		log.I(ctx, "Destroy buffer %v which was created during loop.", buf)
 		bufObj := GetState(stateBuilder.newState).Buffers().Get(buf)
 		stateBuilder.write(stateBuilder.cb.VkDestroyBuffer(bufObj.Device(), buf, memory.Nullptr))
 	}
@@ -1997,7 +2064,7 @@ func (f *frameLoop) resetBuffers(ctx context.Context, stateBuilder *stateBuilder
 			return log.Errf(ctx, err, "Reset buffer [%v] with buffer [%v] failed", dst, src)
 		}
 
-		log.D(ctx, "Reset buffer [%v] with buffer [%v] succeed", dst, src)
+		log.I(ctx, "Reset buffer [%v] with buffer [%v] succeed", dst, src)
 	}
 
 	return nil
@@ -2007,6 +2074,7 @@ func (f *frameLoop) resetBufferViews(ctx context.Context, stateBuilder *stateBui
 
 	// For every BufferView that we need to destroy at the end of the loop...
 	for toDestroy := range f.bufferViewToDestroy {
+		log.I(ctx, "Destroy bufferview %v", toDestroy)
 		// Write the command to delete the created object
 		bufferView := GetState(f.loopEndState).bufferViews.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyBufferView(bufferView.Device(), bufferView.VulkanHandle(), memory.Nullptr))
@@ -2014,6 +2082,7 @@ func (f *frameLoop) resetBufferViews(ctx context.Context, stateBuilder *stateBui
 
 	// For every BufferView that we need to create at the end of the loop...
 	for toCreate := range f.bufferViewToCreate {
+		log.I(ctx, "Create bufferview %v", toCreate)
 		// Write the commands needed to recreate the destroyed object
 		bufferView := GetState(f.loopStartState).bufferViews.Get(toCreate)
 		stateBuilder.createBufferView(bufferView)
@@ -2027,12 +2096,14 @@ func (f *frameLoop) resetSurfaces(ctx context.Context, stateBuilder *stateBuilde
 	// For every Surface that we need to destroy at the end of the loop...
 	for toDestroy := range f.surfaceToDestroy {
 		// Write the command to delete the created object
+		log.I(ctx, "Destroy surface %v", toDestroy)
 		surface := GetState(f.loopEndState).surfaces.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroySurfaceKHR(surface.Instance(), surface.VulkanHandle(), memory.Nullptr))
 	}
 
 	// For every Surface that we need to create at the end of the loop...
 	for toCreate := range f.surfaceToCreate {
+		log.I(ctx, "Create surface %v", toCreate)
 		// Write the commands needed to recreate the destroyed object
 		surface := GetState(f.loopStartState).surfaces.Get(toCreate)
 		stateBuilder.createSurface(surface)
@@ -2059,6 +2130,7 @@ func (f *frameLoop) resetSwapchains(ctx context.Context, stateBuilder *stateBuil
 
 	// For every Swapchain that we need to destroy at the end of the loop...
 	for toDestroy := range f.swapchainToDestroy {
+		log.I(ctx, "Destroy swapchain %v", toDestroy)
 		// Write the command to delete the created object
 		swapchain := GetState(f.loopEndState).swapchains.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroySwapchainKHR(swapchain.Device(), swapchain.VulkanHandle(), memory.Nullptr))
@@ -2066,6 +2138,7 @@ func (f *frameLoop) resetSwapchains(ctx context.Context, stateBuilder *stateBuil
 
 	// For every Swapchain that we need to create at the end of the loop...
 	for toCreate := range f.swapchainToCreate {
+		log.I(ctx, "Create swapchain %v", toCreate)
 		// Write the commands needed to recreate the destroyed object
 		swapchain := GetState(f.loopStartState).swapchains.Get(toCreate)
 		stateBuilder.createSwapchain(swapchain)
@@ -2077,13 +2150,16 @@ func (f *frameLoop) resetSwapchains(ctx context.Context, stateBuilder *stateBuil
 func (f *frameLoop) resetImages(ctx context.Context, stateBuilder *stateBuilder, imgPrimer *imagePrimer) error {
 
 	for toDestroy := range f.imageToDestroy {
-		log.D(ctx, "Destroy image %v which was created during loop.", toDestroy)
+		log.I(ctx, "Destroy image %v which was created during loop.", toDestroy)
 		image := GetState(f.loopEndState).Images().Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyImage(image.Device(), toDestroy, memory.Nullptr))
 
 		imageViewUsers := image.Views().All()
-		for imageView := range imageViewUsers {
+		for imageView, image := range imageViewUsers {
+			log.I(ctx, "Image view %v need to be destroy due to image %v is destroyed", imageView, image.VulkanHandle())
+
 			f.imageViewToDestroy[imageView] = true
+
 		}
 	}
 
@@ -2094,17 +2170,56 @@ func (f *frameLoop) resetImages(ctx context.Context, stateBuilder *stateBuilder,
 	apiState := GetState(stateBuilder.newState)
 
 	for toCreate := range f.imageToCreate {
-		log.D(ctx, "Recreate image %v which was destroyed during loop.", toCreate)
+		log.I(ctx, "Recreate image %v which was destroyed during loop.", toCreate)
 		image := GetState(f.loopStartState).Images().Get(toCreate)
+		//
+
 		stateBuilder.createImage(image, f.loopStartState, toCreate)
+
 		// For image creation, the associated image views changes are handled in the restore step below.
 	}
 
 	for dst, src := range f.imageToRestore {
 
+		stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+			b.JumpLabel(uint32(555))
+			return nil
+		}))
+
 		dstObj := apiState.Images().Get(dst)
+		srcObj := apiState.Images().Get(src)
+
+		// dstImgObj := GetState(p.sb.newState).Images().Get(dstImg)
+
+		transDstBit := VkImageUsageFlags(VkImageUsageFlagBits_VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+		attBits := VkImageUsageFlags(VkImageUsageFlagBits_VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VkImageUsageFlagBits_VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+		storageBit := VkImageUsageFlags(VkImageUsageFlagBits_VK_IMAGE_USAGE_STORAGE_BIT)
+		isDepth := (dstObj.Info().Usage() & VkImageUsageFlags(VkImageUsageFlagBits_VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0
+
+		primeByCopy := (dstObj.Info().Usage()&transDstBit) != 0 && (!isDepth)
+
+		primeByRendering := (!primeByCopy) && ((dstObj.Info().Usage() & attBits) != 0)
+		primeByImageStore := (!primeByCopy) && (!primeByRendering) && ((dstObj.Info().Usage() & storageBit) != 0)
+
+		queue := getQueueForPriming(stateBuilder, srcObj, VkQueueFlagBits_VK_QUEUE_GRAPHICS_BIT)
+		queueHandler := stateBuilder.scratchRes.GetQueueCommandHandler(stateBuilder, queue.VulkanHandle())
+		inputAttachmentPreBarriers := ipImageLayoutTransitionBarriers(stateBuilder, srcObj, sameLayoutsOfImage(srcObj), useSpecifiedLayout(ipRenderInputAttachmentLayout))
+		inputAttachmentPostBarriers := ipImageLayoutTransitionBarriers(stateBuilder, srcObj, useSpecifiedLayout(ipRenderInputAttachmentLayout), sameLayoutsOfImage(srcObj))
+
+		if primeByRendering {
+			// log.I(ctx, "image %#v will be primed by rendering.", dstObj)
+
+			log.I(ctx, "Image %#v, inputAttachmentPreBarriers %#v, inputAttachmentPostBarriers %#v", srcObj, inputAttachmentPreBarriers, inputAttachmentPostBarriers)
+			if err := ipRecordImageMemoryBarriers(stateBuilder, queueHandler, inputAttachmentPreBarriers...); err != nil {
+				log.E(stateBuilder.ctx, "Failed to record image layout transition for input attachment")
+			}
+		}
+		if primeByImageStore {
+			log.I(ctx, "image %#v will be primed by storing.", dstObj)
+		}
 
 		primeable, err := imgPrimer.newPrimeableImageDataFromDevice(src, dst)
+
 		if err != nil {
 			return log.Errf(ctx, err, "Create primeable image data for image %v", dst)
 		}
@@ -2114,14 +2229,27 @@ func (f *frameLoop) resetImages(ctx context.Context, stateBuilder *stateBuilder,
 		if err != nil {
 			return log.Errf(ctx, err, "Priming image %v with data", dst)
 		}
-
-		log.D(ctx, "Prime image from [%v] to [%v] succeed", src, dst)
+		if primeByRendering {
+			ipRecordImageMemoryBarriers(stateBuilder, queueHandler, inputAttachmentPostBarriers...)
+		}
+		stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+			b.JumpLabel(uint32(666))
+			return nil
+		}))
+		log.I(ctx, "Prime image from [%v] to [%v] succeed", src, dst)
 
 		// If we (re)created an Image, then we will have invalidated all ImageViews that were using it at the time the loop started.
 		// (things using it that were created inside the loop will be automatically recreated anyway so they don't need special treatment here)
 		// These ImageViews will need to be (re)created, so add them to the maps to destroy and create in that order.
 		imageViewUsers := GetState(f.loopStartState).images.Get(dst).Views().All()
-		for imageView := range imageViewUsers {
+		for imageView, imageViewObj := range imageViewUsers {
+
+			if imageViewObj.Image() == NilImageObjectʳ {
+				log.I(ctx, "Image for imageview %v is nil ", imageView)
+				continue
+			}
+			log.I(ctx, "Image view %v need to be destroy and created due to image %v", imageView, dst)
+
 			f.imageViewToDestroy[imageView] = true
 			f.imageViewToCreate[imageView] = true
 		}
@@ -2134,17 +2262,43 @@ func (f *frameLoop) resetImageViews(ctx context.Context, stateBuilder *stateBuil
 
 	// For every ImageView that we need to destroy at the end of the loop...
 	for toDestroy := range f.imageViewToDestroy {
+		log.I(ctx, "Destroy image view %v ", toDestroy)
 		// Write the command to delete the created object
+
 		imageView := GetState(f.loopEndState).imageViews.Get(toDestroy)
+		// log.I(ctx, "image framebuffer user %v", imageView.FramebufferUsers())
+		for framebuffer := range imageView.FramebufferUsers().All() {
+			log.I(ctx, "framebuffer %v used image view %v", framebuffer, imageView)
+		}
+
+		for descriptor := range imageView.DescriptorUsers().All() {
+			log.I(ctx, "descriptor %v used image view %v", descriptor, imageView)
+		}
+		stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+			b.JumpLabel(uint32(777))
+			return nil
+		}))
 		stateBuilder.write(stateBuilder.cb.VkDestroyImageView(imageView.Device(), imageView.VulkanHandle(), memory.Nullptr))
+		stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+			b.JumpLabel(uint32(888))
+			return nil
+		}))
 	}
 
 	// For every ImageView that we need to create at the end of the loop...
 	for toCreate := range f.imageViewToCreate {
+		log.I(ctx, "Create image view %v", toCreate)
 		// Write the commands needed to recreate the destroyed object
 		imageView := GetState(f.loopStartState).imageViews.Get(toCreate)
+		stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+			b.JumpLabel(uint32(1111))
+			return nil
+		}))
 		stateBuilder.createImageView(imageView)
-
+		stateBuilder.write(stateBuilder.cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
+			b.JumpLabel(uint32(2222))
+			return nil
+		}))
 		framebufferUsers := imageView.FramebufferUsers().All()
 		for framebuffer := range framebufferUsers {
 			f.framebufferToDestroy[framebuffer] = true
@@ -2210,6 +2364,7 @@ func (f *frameLoop) copyImage(ctx context.Context, srcImg, dstImg ImageObjectʳ,
 	if err = ipRecordImageMemoryBarriers(stateBuilder, queueHandler, postCopyBarriers...); err != nil {
 		return log.Err(ctx, err, "Failed at post device copy image layout transition")
 	}
+	// log.I(ctx, "ipImageLayoutTransitionBarriers postCopyBarriers: %+v", postCopyBarriers)
 
 	return nil
 }
@@ -2218,6 +2373,7 @@ func (f *frameLoop) resetSamplerYcbcrConversions(ctx context.Context, stateBuild
 
 	// For every SamplerYcbcrConversion that we need to destroy at the end of the loop...
 	for toDestroy := range f.samplerYcbcrConversionToDestroy {
+		log.I(ctx, "Destroy samplerYcbcrConversion %v", toDestroy)
 		// Write the command to delete the created object
 		samplerYcbcrConversion := GetState(f.loopEndState).samplerYcbcrConversions.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroySamplerYcbcrConversion(samplerYcbcrConversion.Device(), samplerYcbcrConversion.VulkanHandle(), memory.Nullptr))
@@ -2225,6 +2381,7 @@ func (f *frameLoop) resetSamplerYcbcrConversions(ctx context.Context, stateBuild
 
 	// For every SamplerYcbcrConversion that we need to create at the end of the loop...
 	for toCreate := range f.samplerYcbcrConversionToCreate {
+		log.I(ctx, "Create samplerYcbcrConversion %v", toCreate)
 		// Write the commands needed to recreate the destroyed object
 		samplerYcbcrConversion := GetState(f.loopStartState).samplerYcbcrConversions.Get(toCreate)
 		stateBuilder.createSamplerYcbcrConversion(samplerYcbcrConversion)
@@ -2234,7 +2391,7 @@ func (f *frameLoop) resetSamplerYcbcrConversions(ctx context.Context, stateBuild
 	for _, samplerObject := range GetState(f.loopStartState).Samplers().All() {
 		ycbcrConversion := samplerObject.YcbcrConversion()
 		if ycbcrConversion == NilSamplerYcbcrConversionObjectʳ {
-			log.D(ctx, "Sampler %v doesn't enable ycbcrConversion", samplerObject)
+			log.I(ctx, "Sampler %v doesn't enable ycbcrConversion", samplerObject)
 			continue
 		}
 		if _, ok := f.samplerYcbcrConversionToCreate[ycbcrConversion.VulkanHandle()]; ok {
@@ -2251,6 +2408,7 @@ func (f *frameLoop) resetSamplers(ctx context.Context, stateBuilder *stateBuilde
 	// For every Sampler that we need to destroy at the end of the loop...
 	for toDestroy := range f.samplerToDestroy {
 		// Write the command to delete the created object
+		log.I(ctx, "Destroy sampler %v", toDestroy)
 		sampler := GetState(f.loopEndState).samplers.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroySampler(sampler.Device(), sampler.VulkanHandle(), memory.Nullptr))
 	}
@@ -2258,6 +2416,7 @@ func (f *frameLoop) resetSamplers(ctx context.Context, stateBuilder *stateBuilde
 	// For every Sampler that we need to create at the end of the loop...
 	for toCreate := range f.samplerToCreate {
 		// Write the commands needed to recreate the destroyed object
+		log.I(ctx, "Create sampler %v", toCreate)
 		sampler := GetState(f.loopStartState).samplers.Get(toCreate)
 		stateBuilder.createSampler(sampler)
 
@@ -2280,6 +2439,7 @@ func (f *frameLoop) resetShaderModules(ctx context.Context, stateBuilder *stateB
 	// For every ShaderModule that we need to destroy at the end of the loop...
 	for toDestroy := range f.shaderModuleToDestroy {
 		// Write the command to delete the created object
+		log.I(ctx, "Destroy shader module %v", toDestroy)
 		shaderModule := GetState(f.loopEndState).shaderModules.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyShaderModule(shaderModule.Device(), shaderModule.VulkanHandle(), memory.Nullptr))
 	}
@@ -2287,6 +2447,7 @@ func (f *frameLoop) resetShaderModules(ctx context.Context, stateBuilder *stateB
 	// For every ShaderModule that we need to create at the end of the loop...
 	for toCreate := range f.shaderModuleToCreate {
 		// Write the commands needed to recreate the destroyed object
+		log.I(ctx, "Create shader module %v", toCreate)
 		shaderModule := GetState(f.loopStartState).shaderModules.Get(toCreate)
 		stateBuilder.createShaderModule(shaderModule)
 	}
@@ -2317,6 +2478,7 @@ func (f *frameLoop) resetDescriptorSetLayouts(ctx context.Context, stateBuilder 
 
 	// For every DescriptorSetLayout that we need to destroy at the end of the loop...
 	for toDestroy := range f.descriptorSetLayoutToDestroy {
+		log.I(ctx, "Destroy descriptersetlayout %v", toDestroy)
 		// Write the command to delete the created object
 		descSetLay := GetState(f.loopEndState).descriptorSetLayouts.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyDescriptorSetLayout(descSetLay.Device(), descSetLay.VulkanHandle(), memory.Nullptr))
@@ -2325,6 +2487,7 @@ func (f *frameLoop) resetDescriptorSetLayouts(ctx context.Context, stateBuilder 
 	// For every DescriptorSetLayout that we need to create at the end of the loop...
 	for toCreate := range f.descriptorSetLayoutToCreate {
 		// Write the commands needed to recreate the destroyed object
+		log.I(ctx, "Create descriptersetlayout %v", toCreate)
 		stateBuilder.createDescriptorSetLayout(GetState(f.loopStartState).descriptorSetLayouts.Get(toCreate))
 	}
 
@@ -2356,12 +2519,14 @@ func (f *frameLoop) resetPipelineLayouts(ctx context.Context, stateBuilder *stat
 	// For every PipelineLayout that we need to destroy at the end of the loop...
 	for toDestroy := range f.pipelineLayoutToDestroy {
 		// Write the command to delete the created object
+		log.I(ctx, "Destroy pipelineLayout %v", toDestroy)
 		pipelineLayout := GetState(f.loopEndState).pipelineLayouts.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyPipelineLayout(pipelineLayout.Device(), pipelineLayout.VulkanHandle(), memory.Nullptr))
 	}
 
 	// For every PipelineLayout that we need to create at the end of the loop...
 	for toCreate := range f.pipelineLayoutToCreate {
+		log.I(ctx, "Create pipelineLayout %v", toCreate)
 		// Write the commands needed to recreate the destroyed object
 		stateBuilder.createPipelineLayout(GetState(f.loopStartState).pipelineLayouts.Get(toCreate))
 	}
@@ -2393,6 +2558,7 @@ func (f *frameLoop) resetPipelines(ctx context.Context, stateBuilder *stateBuild
 	for toDestroy := range f.pipelineToDestroy {
 
 		// Write the command to delete the created object
+		log.I(ctx, "Destroy pipeline %v", toDestroy)
 		computePipeline, isComputePipeline := GetState(f.loopEndState).ComputePipelines().All()[toDestroy]
 		graphicsPipeline, isGraphicsPipeline := GetState(f.loopEndState).GraphicsPipelines().All()[toDestroy]
 
@@ -2411,6 +2577,7 @@ func (f *frameLoop) resetPipelines(ctx context.Context, stateBuilder *stateBuild
 
 	// For every ComputePipeline that we need to create at the end of the loop...
 	for toCreate := range f.computePipelineToCreate {
+		log.I(ctx, "Create pipeline %v", toCreate)
 		// Write the commands needed to recreate the destroyed object
 		stateBuilder.createComputePipeline(GetState(f.loopStartState).computePipelines.Get(toCreate))
 	}
@@ -2418,6 +2585,7 @@ func (f *frameLoop) resetPipelines(ctx context.Context, stateBuilder *stateBuild
 	// For every GraphicsPipeline that we need to create at the end of the loop...
 	for toCreate := range f.graphicsPipelineToCreate {
 		// Write the commands needed to recreate the destroyed object
+		log.I(ctx, "Create pipeline %v", toCreate)
 		stateBuilder.createGraphicsPipeline(GetState(f.loopStartState).graphicsPipelines.Get(toCreate))
 	}
 
@@ -2429,6 +2597,7 @@ func (f *frameLoop) resetPipelineCaches(ctx context.Context, stateBuilder *state
 	// For every PipelineCache that we need to destroy at the end of the loop...
 	for toDestroy := range f.pipelineCacheToDestroy {
 		// Write the command to delete the created object
+		log.I(ctx, "Destroy pipeline cache %v", toDestroy)
 		pipelineCache := GetState(f.loopEndState).pipelineCaches.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyPipelineCache(pipelineCache.Device(), pipelineCache.VulkanHandle(), memory.Nullptr))
 	}
@@ -2436,6 +2605,7 @@ func (f *frameLoop) resetPipelineCaches(ctx context.Context, stateBuilder *state
 	// For every PipelineCache that we need to create at the end of the loop...
 	for toCreate := range f.pipelineCacheToCreate {
 		// Write the commands needed to recreate the destroyed object
+		log.I(ctx, "Create pipeline cache %v", toCreate)
 		stateBuilder.createPipelineCache(GetState(f.loopStartState).pipelineCaches.Get(toCreate))
 	}
 
@@ -2443,7 +2613,7 @@ func (f *frameLoop) resetPipelineCaches(ctx context.Context, stateBuilder *state
 	for _, computePipelineObject := range GetState(f.loopStartState).ComputePipelines().All() {
 		pipelineCache := computePipelineObject.PipelineCache()
 		if pipelineCache == NilPipelineCacheObjectʳ {
-			log.D(ctx, "computePipelineObject %v doesn't have a pipeline cache.", computePipelineObject)
+			log.I(ctx, "computePipelineObject %v doesn't have a pipeline cache.", computePipelineObject)
 			continue
 		}
 		if _, ok := f.pipelineCacheToCreate[pipelineCache.VulkanHandle()]; ok {
@@ -2456,7 +2626,7 @@ func (f *frameLoop) resetPipelineCaches(ctx context.Context, stateBuilder *state
 	for _, graphicsPipelineObject := range GetState(f.loopStartState).GraphicsPipelines().All() {
 		pipelineCache := graphicsPipelineObject.PipelineCache()
 		if pipelineCache == NilPipelineCacheObjectʳ {
-			log.D(ctx, "graphicsPipelineObject %v doesn't have a pipeline cache.", graphicsPipelineObject)
+			log.I(ctx, "graphicsPipelineObject %v doesn't have a pipeline cache.", graphicsPipelineObject)
 			continue
 		}
 		if _, ok := f.pipelineCacheToCreate[pipelineCache.VulkanHandle()]; ok {
@@ -2473,12 +2643,14 @@ func (f *frameLoop) resetDescriptorPools(ctx context.Context, stateBuilder *stat
 	// For every DescriptorPool that we need to destroy at the end of the loop...
 	for toDestroy := range f.descriptorPoolToDestroy {
 		// Write the command to delete the created object
+		log.I(ctx, "Destroy descriptorPool %v", toDestroy)
 		descPool := GetState(f.loopEndState).descriptorPools.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyDescriptorPool(descPool.Device(), descPool.VulkanHandle(), memory.Nullptr))
 	}
 
 	// For every DescriptorPool that we need to create at the end of the loop...
 	for toCreate := range f.descriptorPoolToCreate {
+		log.I(ctx, "Create descriptorpool %v", toCreate)
 		// Write the commands needed to recreate the destroyed object
 		descPool := GetState(f.loopStartState).DescriptorPools().Get(toCreate)
 		stateBuilder.createDescriptorPoolAndAllocateDescriptorSets(descPool)
@@ -2537,6 +2709,7 @@ func (f *frameLoop) resetDescriptorSets(ctx context.Context, stateBuilder *state
 
 	// For every DescriptorSet that we need to free at the end of the loop...
 	for toDestroy := range f.descriptorSetToFree {
+		log.I(ctx, "Destroy descriptorSet %v", toDestroy)
 		// Write the command to free the created object
 		descSetObj := GetState(f.loopEndState).descriptorSets.Get(toDestroy)
 		handle := []VkDescriptorSet{descSetObj.VulkanHandle()}
@@ -2549,6 +2722,7 @@ func (f *frameLoop) resetDescriptorSets(ctx context.Context, stateBuilder *state
 
 	// For every DescriptorSet that we need to create at the end of the loop...
 	for toCreate := range f.descriptorSetToAllocate {
+		log.I(ctx, "Create descriptorSet %v", toCreate)
 		// Write the commands needed to reallocate the freed object
 		descSetObj := GetState(f.loopStartState).descriptorSets.Get(toCreate)
 		descPoolObj := GetState(f.loopStartState).descriptorPools.Get(descSetObj.DescriptorPool())
@@ -2575,7 +2749,7 @@ func (f *frameLoop) resetSemaphores(ctx context.Context, stateBuilder *stateBuil
 	for sem := range f.semaphoreToDestroy {
 		semObj := GetState(f.loopEndState).Semaphores().Get(sem)
 		if semObj != NilSemaphoreObjectʳ {
-			log.D(ctx, "Destroy semaphore %v which was created during loop.", sem)
+			log.I(ctx, "Destroy semaphore %v which was created during loop.", sem)
 			stateBuilder.write(stateBuilder.cb.VkDestroySemaphore(semObj.Device(), semObj.VulkanHandle(), memory.Nullptr))
 		} else {
 			log.E(ctx, "Semaphore %v cannot be found in the loop ending state", sem)
@@ -2585,7 +2759,7 @@ func (f *frameLoop) resetSemaphores(ctx context.Context, stateBuilder *stateBuil
 	for sem := range f.semaphoreToCreate {
 		semObj := GetState(f.loopStartState).Semaphores().Get(sem)
 		if semObj != NilSemaphoreObjectʳ {
-			log.D(ctx, "Create semaphore %v which was destroyed during loop.", sem)
+			log.I(ctx, "Create semaphore %v which was destroyed during loop.", sem)
 			stateBuilder.createSemaphore(semObj)
 		} else {
 			log.E(ctx, "Semaphore %v cannot be found in the loop starting state", sem)
@@ -2619,7 +2793,7 @@ func (f *frameLoop) resetSemaphores(ctx context.Context, stateBuilder *stateBuil
 			// used to ensure these occur in order. Semaphore waits and signals should thus occur in discrete 1:1 pairs."
 			// So there's no need to wait for it be signalled here. And add additional waiting here may break the 1:1 waits and signals pairs.
 		} else {
-			log.D(ctx, "Signal semaphore %v.", sem)
+			log.I(ctx, "Signal semaphore %v.", sem)
 			stateBuilder.write(stateBuilder.cb.VkQueueSubmit(
 				queue.VulkanHandle(),
 				1,
@@ -2647,7 +2821,7 @@ func (f *frameLoop) resetFences(ctx context.Context, stateBuilder *stateBuilder)
 	for fence := range f.fenceToDestroy {
 		fenceObj := GetState(f.loopEndState).Fences().Get(fence)
 		if fenceObj != NilFenceObjectʳ {
-			log.D(ctx, "Destroy fence: %v which was created during loop.", fence)
+			log.I(ctx, "Destroy fence: %v which was created during loop.", fence)
 			stateBuilder.write(stateBuilder.cb.VkDestroyFence(fenceObj.Device(), fenceObj.VulkanHandle(), memory.Nullptr))
 		} else {
 			log.E(ctx, "Fence %v cannot be found in the loop ending state", fence)
@@ -2657,7 +2831,7 @@ func (f *frameLoop) resetFences(ctx context.Context, stateBuilder *stateBuilder)
 	for fence := range f.fenceToCreate {
 		fenceObj := GetState(f.loopStartState).Fences().Get(fence)
 		if fenceObj != NilFenceObjectʳ {
-			log.D(ctx, "Create fence %v which was destroyed during loop.", fence)
+			log.I(ctx, "Create fence %v which was destroyed during loop.", fence)
 			stateBuilder.createFence(fenceObj)
 		} else {
 			log.E(ctx, "Fence %v cannot be found in the loop starting state", fence)
@@ -2683,10 +2857,10 @@ func (f *frameLoop) resetFences(ctx context.Context, stateBuilder *stateBuilder)
 			pFence := stateBuilder.MustAllocReadData(fenceObj.VulkanHandle()).Ptr()
 			// Wait fence to be signaled before resetting it.
 			stateBuilder.write(stateBuilder.cb.VkWaitForFences(fenceObj.Device(), 1, pFence, VkBool32(1), 0xFFFFFFFFFFFFFFFF, VkResult_VK_SUCCESS))
-			log.D(ctx, "Reset fence %v.", fence)
+			log.I(ctx, "Reset fence %v.", fence)
 			stateBuilder.write(stateBuilder.cb.VkResetFences(fenceObj.Device(), 1, pFence, VkResult_VK_SUCCESS))
 		} else {
-			log.D(ctx, "Singal fence %v.", fence)
+			log.I(ctx, "Singal fence %v.", fence)
 			queue := stateBuilder.getQueueFor(
 				VkQueueFlagBits_VK_QUEUE_GRAPHICS_BIT|VkQueueFlagBits_VK_QUEUE_COMPUTE_BIT|VkQueueFlagBits_VK_QUEUE_TRANSFER_BIT,
 				[]uint32{},
@@ -2714,7 +2888,7 @@ func (f *frameLoop) resetEvents(ctx context.Context, stateBuilder *stateBuilder)
 	for event := range f.eventToDestroy {
 		eventObj := GetState(f.loopEndState).Events().Get(event)
 		if eventObj != NilEventObjectʳ {
-			log.D(ctx, "Destroy event: %v which was created during loop.", event)
+			log.I(ctx, "Destroy event: %v which was created during loop.", event)
 			stateBuilder.write(stateBuilder.cb.VkDestroyEvent(eventObj.Device(), eventObj.VulkanHandle(), memory.Nullptr))
 		} else {
 			log.E(ctx, "Event %v cannot be found in loop ending state.", event)
@@ -2724,7 +2898,7 @@ func (f *frameLoop) resetEvents(ctx context.Context, stateBuilder *stateBuilder)
 	for event := range f.eventToCreate {
 		eventObj := GetState(f.loopStartState).Events().Get(event)
 		if eventObj != NilEventObjectʳ {
-			log.D(ctx, "Create event %v which was destroyed during loop.", event)
+			log.I(ctx, "Create event %v which was destroyed during loop.", event)
 			stateBuilder.createEvent(eventObj)
 		} else {
 			log.E(ctx, "Event %v cannot be found in loop starting state.", event)
@@ -2746,12 +2920,12 @@ func (f *frameLoop) resetEvents(ctx context.Context, stateBuilder *stateBuilder)
 			continue
 		}
 		if eventObj.Signaled() {
-			log.D(ctx, "Reset event %v ", event)
+			log.I(ctx, "Reset event %v ", event)
 			// Wait event to be signaled before resetting it.
 			stateBuilder.write(stateBuilder.cb.ReplayGetEventStatus(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_EVENT_SET, true, VkResult_VK_SUCCESS))
 			stateBuilder.write(stateBuilder.cb.VkResetEvent(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_SUCCESS))
 		} else {
-			log.D(ctx, "Set event %v ", event)
+			log.I(ctx, "Set event %v ", event)
 			stateBuilder.write(stateBuilder.cb.ReplayGetEventStatus(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_EVENT_RESET, true, VkResult_VK_SUCCESS))
 			stateBuilder.write(stateBuilder.cb.VkSetEvent(eventObj.Device(), eventObj.VulkanHandle(), VkResult_VK_SUCCESS))
 		}
@@ -2765,12 +2939,14 @@ func (f *frameLoop) resetFramebuffers(ctx context.Context, stateBuilder *stateBu
 	// For every Framebuffers that we need to destroy at the end of the loop...
 	for toDestroy := range f.framebufferToDestroy {
 		// Write the command to delete the created object
+		log.I(ctx, "Destroy framebuffer %v", toDestroy)
 		framebuffer := GetState(f.loopEndState).framebuffers.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyFramebuffer(framebuffer.Device(), framebuffer.VulkanHandle(), memory.Nullptr))
 	}
 
 	// For every Framebuffers that we need to create at the end of the loop...
 	for toCreate := range f.framebufferToCreate {
+		log.I(ctx, "Create framebuffer %v", toCreate)
 		// Write the commands needed to recreate the destroyed object
 		framebuffer := GetState(f.loopStartState).framebuffers.Get(toCreate)
 		stateBuilder.createFramebuffer(framebuffer)
@@ -2783,6 +2959,7 @@ func (f *frameLoop) resetRenderPasses(ctx context.Context, stateBuilder *stateBu
 
 	// For every RenderPass that we need to destroy at the end of the loop...
 	for toDestroy := range f.renderPassToDestroy {
+		log.I(ctx, "Destroy render pass %v", toDestroy)
 		// Write the command to delete the created object
 		renderPass := GetState(f.loopEndState).renderPasses.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyRenderPass(renderPass.Device(), renderPass.VulkanHandle(), memory.Nullptr))
@@ -2791,6 +2968,7 @@ func (f *frameLoop) resetRenderPasses(ctx context.Context, stateBuilder *stateBu
 	// For every RenderPass that we need to create at the end of the loop...
 	for toCreate := range f.renderPassToCreate {
 		// Write the commands needed to recreate the destroyed object
+		log.I(ctx, "Create render pass %v", toCreate)
 		renderPass := GetState(f.loopStartState).renderPasses.Get(toCreate)
 		stateBuilder.createRenderPass(renderPass)
 	}
@@ -2803,6 +2981,7 @@ func (f *frameLoop) resetQueryPools(ctx context.Context, stateBuilder *stateBuil
 	// For every QueryPools that we need to destroy at the end of the loop...
 	for toDestroy := range f.queryPoolToDestroy {
 		// Write the command to delete the created object
+		log.I(ctx, "Destroy queryPool %v", toDestroy)
 		queryPool := GetState(f.loopEndState).queryPools.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyQueryPool(queryPool.Device(), queryPool.VulkanHandle(), memory.Nullptr))
 	}
@@ -2810,6 +2989,7 @@ func (f *frameLoop) resetQueryPools(ctx context.Context, stateBuilder *stateBuil
 	// For every QueryPools that we need to create at the end of the loop...
 	for toCreate := range f.queryPoolToCreate {
 		// Write the commands needed to recreate the destroyed object
+		log.I(ctx, "Create queryPool %v", toCreate)
 		queryPool := GetState(f.loopStartState).queryPools.Get(toCreate)
 		stateBuilder.createQueryPool(queryPool)
 	}
@@ -2822,6 +3002,7 @@ func (f *frameLoop) resetCommandPools(ctx context.Context, stateBuilder *stateBu
 	// For every CommandPool that we need to destroy at the end of the loop...
 	for toDestroy := range f.commandPoolToDestroy {
 		// Write the command to delete the created object
+		log.I(ctx, "Destroy commandPool %v", toDestroy)
 		commandPool := GetState(f.loopEndState).commandPools.Get(toDestroy)
 		stateBuilder.write(stateBuilder.cb.VkDestroyCommandPool(commandPool.Device(), commandPool.VulkanHandle(), memory.Nullptr))
 	}
@@ -2829,6 +3010,7 @@ func (f *frameLoop) resetCommandPools(ctx context.Context, stateBuilder *stateBu
 	// For every CommandPool that we need to create at the end of the loop...
 	for toCreate := range f.commandPoolToCreate {
 		// Write the commands needed to recreate the destroyed object
+		log.I(ctx, "Create commandPool %v", toCreate)
 		commandPool := GetState(f.loopStartState).commandPools.Get(toCreate)
 		stateBuilder.createCommandPool(commandPool)
 
@@ -2847,7 +3029,7 @@ func (f *frameLoop) resetCommandPools(ctx context.Context, stateBuilder *stateBu
 func (f *frameLoop) resetCommandBuffers(ctx context.Context, stateBuilder *stateBuilder) error {
 
 	for cmdBuf := range f.commandBufferToFree {
-		log.D(ctx, "Command buffer %v allocated during loop, free it.", cmdBuf)
+		log.I(ctx, "Command buffer %v allocated during loop, free it.", cmdBuf)
 		cmdBufObj := GetState(f.loopEndState).CommandBuffers().Get(cmdBuf)
 		if cmdBufObj != NilCommandBufferObjectʳ {
 			stateBuilder.write(stateBuilder.cb.VkFreeCommandBuffers(
@@ -2867,7 +3049,7 @@ func (f *frameLoop) resetCommandBuffers(ctx context.Context, stateBuilder *state
 			log.F(ctx, true, "Command buffer %v can not be found in loop starting state", cmdBuf)
 			continue
 		}
-		log.D(ctx, "Command buffer %v freed during loop, recreate it.", cmdBuf)
+		log.I(ctx, "Command buffer %v freed during loop, recreate it.", cmdBuf)
 		stateBuilder.createCommandBuffer(cmdBufObj, cmdBufObj.Level())
 	}
 
@@ -2876,7 +3058,7 @@ func (f *frameLoop) resetCommandBuffers(ctx context.Context, stateBuilder *state
 		if cmdBufObj == NilCommandBufferObjectʳ {
 			log.F(ctx, true, "Command buffer %v can not be found in loop starting state", cmdBuf)
 		}
-		log.D(ctx, "Command buffer %v changed during loop, re-record it.", cmdBuf)
+		log.I(ctx, "Command buffer %v changed during loop, re-record it.", cmdBuf)
 		stateBuilder.write(stateBuilder.cb.VkResetCommandBuffer(
 			cmdBufObj.VulkanHandle(),
 			0,

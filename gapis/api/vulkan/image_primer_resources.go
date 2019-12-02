@@ -14,7 +14,10 @@
 
 package vulkan
 
-import "github.com/google/gapid/gapis/memory"
+import (
+	"github.com/google/gapid/core/log"
+	"github.com/google/gapid/gapis/memory"
+)
 
 // descriptorSetPoolReservation is the result of descriptor set reservation
 // request to homoDescriptorSetPool. It contains the descriptor sets reserved
@@ -260,6 +263,7 @@ func (p *naiveImageViewPool) getOrCreateImageView(sb *stateBuilder, nm debugMark
 func (p *naiveImageViewPool) Free(sb *stateBuilder) {
 	for _, v := range p.views {
 		sb.write(sb.cb.VkDestroyImageView(p.dev, v, memory.Nullptr))
+		log.I(sb.ctx, "Destroy ImageView %v in imageprimer ", v)
 	}
 	p.views = map[ipImageViewInfo]VkImageView{}
 	return

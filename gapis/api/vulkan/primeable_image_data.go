@@ -81,7 +81,6 @@ func (c ipPrimeableHostCopy) prime(sb *stateBuilder, srcLayout, dstLayout ipLayo
 			dstImageObjs = append(dstImageObjs, dstImgObj)
 		}
 	}
-
 	preCopyBarriers := []VkImageMemoryBarrier{}
 	postCopyBarriers := []VkImageMemoryBarrier{}
 
@@ -102,7 +101,6 @@ func (c ipPrimeableHostCopy) prime(sb *stateBuilder, srcLayout, dstLayout ipLayo
 			return log.Errf(sb.ctx, err, "failed at commit buffer image copy commands")
 		}
 	}
-
 	err = ipRecordImageMemoryBarriers(sb, queueHandler, postCopyBarriers...)
 	if err != nil {
 		return log.Errf(sb.ctx, err, "failed at post host copy image layout transition")
@@ -214,10 +212,22 @@ func (pi *ipPrimeableRenderKits) prime(sb *stateBuilder, srcLayout, dstLayout ip
 		return log.Errf(sb.ctx, err, "failed at pre rendering image layout transition")
 	}
 	for _, kit := range pi.kits {
+		// log.I(sb.ctx, "kit.inputPreBarriers is %+v", kit.inputPreBarriers)
+		// err = ipRecordImageMemoryBarriers(sb, queueHandler, kit.inputPreBarriers...)
+		// if err != nil {
+		// 	return log.Errf(sb.ctx, err, "failed at pre rendering image layout transition")
+		// }
+
 		cmdBatch := kit.BuildRenderCommands(sb)
+
 		if err = cmdBatch.Commit(sb, queueHandler); err != nil {
 			return log.Errf(sb.ctx, err, "failed at committing render kit commands")
 		}
+		// log.I(sb.ctx, "kit.inputPostBarriers is %+v", kit.inputPostBarriers)
+		// err = ipRecordImageMemoryBarriers(sb, queueHandler, kit.inputPostBarriers...)
+		// if err != nil {
+		// 	return log.Errf(sb.ctx, err, "failed at pre rendering image layout transition")
+		// }
 	}
 	postRenderingBarriers := ipImageLayoutTransitionBarriers(sb, newStateImgObj, useSpecifiedLayout(renderingLayout), dstLayout)
 	err = ipRecordImageMemoryBarriers(sb, queueHandler, postRenderingBarriers...)
@@ -255,6 +265,7 @@ func (pi *ipPrimeableStoreKits) prime(sb *stateBuilder, srcLayout, dstLayout ipL
 	}
 	queueHandler := sb.scratchRes.GetQueueCommandHandler(sb, pi.queue)
 	preStoreBarriers := ipImageLayoutTransitionBarriers(sb, newStateImgObj, srcLayout, useSpecifiedLayout(ipStoreImageLayout))
+	// log.I(sb.ctx, "ipPrimeableStoreKits postRenderingBarriers %+v ", preStoreBarriers)
 	err = ipRecordImageMemoryBarriers(sb, queueHandler, preStoreBarriers...)
 	if err != nil {
 		return log.Errf(sb.ctx, err, "failed at recording pre image store layout transition")
@@ -266,6 +277,7 @@ func (pi *ipPrimeableStoreKits) prime(sb *stateBuilder, srcLayout, dstLayout ipL
 		}
 	}
 	postStoreBarriers := ipImageLayoutTransitionBarriers(sb, newStateImgObj, useSpecifiedLayout(ipStoreImageLayout), dstLayout)
+	// log.I(sb.ctx, "ipPrimeableStoreKits postStoreBarriers %+v ", postStoreBarriers)
 	err = ipRecordImageMemoryBarriers(sb, queueHandler, postStoreBarriers...)
 	if err != nil {
 		return log.Errf(sb.ctx, err, "failed at recording post image store layout transition")
@@ -708,9 +720,10 @@ func (p *imagePrimer) newPrimeableImageDataFromHost(img VkImage, opaqueBoundRang
 
 // newPrimeableImageDataFromDevice builds primeable image data from the on device source image.
 func (p *imagePrimer) newPrimeableImageDataFromDevice(srcImg, dstImg VkImage) (primeableImageData, error) {
+	log.I(p.sb.ctx, "newPrimeableImageDataFromDevice, srcimage %v, desimage %v", srcImg, dstImg)
 	nilQueueErr := fmt.Errorf("Nil Queue")
 	notImplErr := fmt.Errorf("Not Implemented")
-	srcImgObj := GetState(p.sb.newState).Images().Get(srcImg)
+	// srcImgObj := GetState(p.sb.newState).Images().Get(srcImg)
 	dstImgObj := GetState(p.sb.newState).Images().Get(dstImg)
 
 	transDstBit := VkImageUsageFlags(VkImageUsageFlagBits_VK_IMAGE_USAGE_TRANSFER_DST_BIT)
@@ -718,7 +731,7 @@ func (p *imagePrimer) newPrimeableImageDataFromDevice(srcImg, dstImg VkImage) (p
 	storageBit := VkImageUsageFlags(VkImageUsageFlagBits_VK_IMAGE_USAGE_STORAGE_BIT)
 	isDepth := (dstImgObj.Info().Usage() & VkImageUsageFlags(VkImageUsageFlagBits_VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0
 
-	if isSparseResidency(srcImgObj) != isSparseResidency(dstImgObj) {
+	if isSparseResidency(dstImgObj) != isSparseResidency(dstImgObj) {
 		return nil, fmt.Errorf("src image residency does not match with dst image residency")
 	}
 	primeByCopy := (dstImgObj.Info().Usage()&transDstBit) != 0 && (!isDepth)
@@ -789,10 +802,12 @@ func (p *imagePrimer) newPrimeableImageDataFromDevice(srcImg, dstImg VkImage) (p
 					recipes = append(recipes, r)
 				})
 		}
+		log.I(p.sb.ctx, "primeByRendering, recipies are %#v", recipes)
 		kits, err := kb.BuildRenderKits(p.sb, recipes...)
 		if err != nil {
 			return nil, log.Errf(p.sb.ctx, err, "failed to build render kits from recipes")
 		}
+		log.I(p.sb.ctx, "primeByRendering, kits are %#v", kits)
 		primeable.kits = kits
 
 		return primeable, nil
