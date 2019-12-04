@@ -93,17 +93,16 @@ void WritePpmFile(std::unique_ptr<uint8_t[]> image_data, size_t size,
     case VK_FORMAT_B8G8R8A8_UNORM:
     case VK_FORMAT_B8G8R8A8_UINT:
       for (uint32_t y = 0; y < height; y++) {
-        uint32_t* row = (uint32_t*)data;
+        unsigned int* row = (unsigned int*)data;
         for (uint32_t x = 0; x < width; x++) {
-          uint8_t* bgra = (uint8_t*)row;
-          uint8_t b = *bgra;
-          *bgra = *(bgra + 2);
-          *(bgra + 2) = b;
+          out.write((char*)row + 2, 1);
+          out.write((char*)row + 1, 1);
+          out.write((char*)row, 1);
           row++;
         }
         data += width * 4;
       }
-      // fall through
+      break;
 
     case VK_FORMAT_R8G8B8A8_UNORM:
     case VK_FORMAT_R8G8B8A8_UINT:
